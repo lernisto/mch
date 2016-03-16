@@ -1,0 +1,11 @@
+#!bin/bash
+# Author: Robert Taylor
+# Should be run as root.
+# Get the list of package users from the /etc/passwd file
+package_list=$(cat /etc/passwd|awk -F: '{if($3>999) print $1 }'|sort);
+while read -r line; do
+    echo "$line ...";
+    while read -r fileline; do
+echo "          $fileline";
+    done <<< "$(cat /usr/src/$line/README)"
+done <<< "$package_list"

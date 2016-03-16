@@ -3,7 +3,7 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 #
-# Altered by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# Last changed by Robert Taylor <rtaylor777 AT gmail DOT com> Oct 2013
 DAISY_CHAIN="";
 UNLINK_BYPASS="";
 me=$(whoami);
@@ -154,7 +154,9 @@ for item in "$@"; do
 				fi
 				continue;
 			fi
-			regex="^([0-7])?([0-7][0-7][0-7])$";
+			# We need to support some new rather undocumented behavior of
+			# chmod, mkdir and install supporting more than 4 digit OCTAL-MODE
+			regex="^.*([0-7@])([0-7][0-7][0-7])$";
 			if [[ "$item" =~ $regex ]]; then
 				secondpart="${BASH_REMATCH[2]}";
 				firstpart="";
@@ -170,6 +172,7 @@ for item in "$@"; do
 				options="$options $firstpart$secondpart";
 				continue;
 			fi
+			# This supports 1 to 3 digits for mode setting
 			regex="^([0-7]?[0-7]?[0-7])$";
 			if [[ "$item" =~ $regex ]]; then			
 				firstpart="${BASH_REMATCH[1]}";

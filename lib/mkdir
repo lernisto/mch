@@ -3,7 +3,7 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 #
-# Altered by Robert Taylor <rtaylor777 AT gmail DOT com> Sept 2013
+# Last changed by Robert Taylor <rtaylor777 AT gmail DOT com> Oct 2013
 DAISY_CHAIN="";
 UNLINK_BYPASS="";
 me=$(whoami);
@@ -227,13 +227,20 @@ doclean(){
 		fi
 	done
 }
+notify=0;
+# Keep only the last 4 digits of the OCTAL-MODE.
+regex="(.*\s-m\s*).+([0-7@][0-7][0-7][0-7].*)";
+doclean $regex;
+regex="(.*\s--mode\s*=*\s*).+([0-7@][0-7][0-7][0-7].*)";
+doclean $regex;
 notify=1;
 #echo "Fix the octal -m form of SetUID or SetGID"
-regex="(.*\s-m\s*)[234567]([0-7][0-7][0-7].*)";
+regex="(.*\s-m\s*)[234567@]([0-7][0-7][0-7].*)";
 doclean $regex;
 #echo "Fix the octal --mode form of SetUID or SetGID"
-regex="(.*\s--mode\s*=*\s*)[234567]([0-7][0-7][0-7].*)";
+regex="(.*\s--mode\s*=*\s*)[234567@]([0-7][0-7][0-7].*)";
 doclean $regex;
+#
 options="$options ";# we need a trailing space for the clean up to work
 # Because the characters "ugo" can occur on either side of the "="
 regex="(.*\s)(--mode|-m)\s*=*\s*\S*[\+=-][rwxXtugo]+\S*\s(.*)";
