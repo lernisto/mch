@@ -1,4 +1,9 @@
 #!/bin/bash
+# For improved performance we don't really need to run this through the
+# wrapper scripts.
+WRAPPER_PATH="$PATH";
+export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/tools/bin";
 cd ~/
 find ~/* -maxdepth 0 -type d -exec rm -rf -- {} \;
+export PATH="$WRAPPER_PATH";
 exit 0

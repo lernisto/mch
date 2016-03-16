@@ -3,7 +3,7 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 #
-# Changed by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# Changed by Robert Taylor <rtaylor777 AT gmail DOT com> Sept 2013
 DAISY_CHAIN="";
 UNLINK_BYPASS="";
 me=$(whoami);
@@ -165,6 +165,7 @@ for item in "$@"; do
 			fi
 			continue;
 		fi
+		# Handle double hyphen options first
 		if [[ "$item" = '--help' ]]; then
 			install_audit_log "$DAISY_CHAIN \"--help\"\n";
 			$DAISY_CHAIN "--help";
@@ -174,36 +175,15 @@ for item in "$@"; do
 			install_audit_log "$DAISY_CHAIN \"--version\"\n";
 			$DAISY_CHAIN "--version";
 			exit 0;
-		fi	
-		if [[ "$item" = '-c' ]]; then
-			continue;
-		fi
-		if [[ "$item" = '-d' ]]; then
-			dflag=1;
-			options="$options $item";
-			continue;
 		fi
 		if [[ "$item" = '--directory' ]]; then
 			dflag=1;
 			options="$options $item";
 			continue;
 		fi
-		if [[ "$item" = '-T' ]]; then
-			destisfile=1;
-			options="$options $item";
-			continue;
-		fi
 		if [[ "$item" = '--no-target-directory' ]]; then
 			destisfile=1;
 			options="$options $item";
-			continue;
-		fi
-		regex="^-[og](.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				remnext=1;
-		    fi
-		    report=1;
 			continue;
 		fi
 		regex="^--owner[=]*(.*)$";
@@ -222,22 +202,6 @@ for item in "$@"; do
 		    report=1;
 			continue;
 		fi
-		regex="^-m(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^-S(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
 		regex="^--mode[=]*(.*)$";
 		if [[ "$item" =~ $regex ]]; then
 			if [[ -z "${BASH_REMATCH[1]}" ]]; then
@@ -253,7 +217,7 @@ for item in "$@"; do
 			fi
 			options="$options $item";
 			continue;
-		fi
+		fi		
 		regex="^--suffix[=]*(.*)$";
 		if [[ "$item" =~ $regex ]]; then
 		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
@@ -262,15 +226,20 @@ for item in "$@"; do
 			options="$options $item";
 			continue;
 		fi
-		regex="^-t(.*)$";
+		regex="^--strip-program[=]*(.*)$";
 		if [[ "$item" =~ $regex ]]; then
-			targetoption=1;
 		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				remnext=1;
-				gettarget=1;
-		    else
-		        dest="${BASH_REMATCH[1]}"
-		    fi
+				addnext=1;
+			fi
+			options="$options $item";
+			continue;
+		fi
+		regex="^--context[=]*(.*)$";
+		if [[ "$item" =~ $regex ]]; then
+		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
+				addnext=1;
+			fi
+			options="$options $item";
 			continue;
 		fi
 		regex="^--target-directory[=]*(.*)$";
@@ -283,10 +252,87 @@ for item in "$@"; do
 		        dest="${BASH_REMATCH[1]}";
 		    fi
 			continue;
-		fi
-		regex="^-.+$";# catch other options
+		fi	
+		regex="^--.+$";# catch other double hyphen options
 		if [[ "$item" =~ $regex ]]; then
 			options="$options $item";
+			continue;
+		fi		
+		# these options can be mashed all together mostly
+		regex="^-([^-]+)$";# single hyphen option(s)
+		if [[ "$item" =~ $regex ]]; then
+			mashed="${BASH_REMATCH[1]}";
+			out_options="-";
+			out_flag=0;
+			olength=${#mashed};
+			# We need to process these options from left to right
+			for (( i=0; i<$olength; i++ )); do
+				ochar=${mashed:$i:1};
+				case "$ochar" in
+					c):
+						;;
+					d)  dflag=1; 
+						out_flag=1;# An option we want to keep
+						out_options="$out_options$ochar";
+						;;
+					[vTbCDps])  out_flag=1;# An option we want to keep
+						out_options="$out_options$ochar";
+						;;					
+					*) 	remainder=$((olength-i));
+						mashed=${mashed:$i:$remainder};# only keep remaining
+						break;
+				esac
+			done
+			# add these captured options if any
+			if [[ $out_flag -eq 1 ]]; then
+				options="$options $out_options";				
+			fi
+			# The rest of these if I save them at all I want separated out.
+			# These options are special since if they were mashed with other
+			# options they would have to be at the end of the mess to be valid.
+			regex="^[og](.*)$"; # filter owner and group options
+			if [[ "$mashed" =~ $regex ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					remnext=1;
+				fi
+				report=1;
+				continue;
+			fi
+			regex="^t(.*)$"; # find any target-directory option
+			if [[ "$mashed" =~ $regex ]]; then
+				targetoption=1;
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					remnext=1;
+					gettarget=1;
+				else
+					dest="${BASH_REMATCH[1]}"
+				fi
+				continue;
+			fi
+			regex="^m(.*)$"; # find any mode option
+			if [[ "$mashed" =~ $regex ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					addnext=1;
+				fi
+				options="$options -m${BASH_REMATCH[1]}";
+				continue;				
+			fi
+			regex="^S(.*)$"; # find any suffix option
+			if [[ "$mashed" =~ $regex  ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					addnext=1;
+				fi
+				options="$options -S${BASH_REMATCH[1]}";
+				continue;
+			fi
+			regex="^Z(.*)$"; # find any SELinux security context
+			if [[ "$mashed" =~ $regex  ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					addnext=1;
+				fi
+				options="$options -Z${BASH_REMATCH[1]}";
+				continue;
+			fi
 			continue;
 		fi
 		if [[ -n "$lastitem" ]]; then

@@ -3,7 +3,7 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 #
-# Altered by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# Altered by Robert Taylor <rtaylor777 AT gmail DOT com> Sept 2013
 DAISY_CHAIN="";
 UNLINK_BYPASS="";
 me=$(whoami);
@@ -39,9 +39,12 @@ for p in $(type -ap unlink) ; do
   if [[ "$p" != "/usr/lib/pkgusr/unlink" ]]; then UNLINK_BYPASS="$p"; break ; fi
 done
 
+report=0;
+notify=0;
 options="";
 # In order to preserve whitespace and special characters, "files" is an array
 files=();
+escaped_files="";
 stopgettingoptions=0;
 addnext=0;
 item="";
@@ -49,6 +52,17 @@ pass_error=0;
 pwd=$(pwd);
 error_code=0;
 audit_text="";
+
+report_filtered(){
+	echo 1>&2 "*** Filtered out setuid and/or setgid";
+	echo 1>&2 "*** See the $HOME/mkdir_filtered_options.txt file for details";
+	text="\n";
+	text="$text ------ Filtered out setuid and/or setgid ------\n";
+	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+	text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+	text="$text after: mkdir$options$(echo $escaped_files | sed  -e 's/%/%%/g')\n";
+	printf "$text" >>"$HOME/mkdir_filtered_options.txt";
+}
 
 mkdir_audit_log(){
 	text="\n";
@@ -64,6 +78,16 @@ mkdir_audit_log(){
 	fi
 	# while debugging this wrapper you may want to uncomment the following line
 	#printf "$text" >>"$HOME/mkdir_audit.txt";
+}
+
+add_escaped_file(){
+	lastitem=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
+	regex="^.*['[:space:]].*$";
+	if [[ "$item" =~ $regex ]]; then
+		escaped_files="$escaped_files \"$item\"";
+	else
+		escaped_files="$escaped_files $item";
+	fi
 }
 
 # Syntax
@@ -102,6 +126,7 @@ for item in "$@"; do
 			fi
 			continue;
 		fi
+		# Handle double hyphen options first
 		if [[ "$item" = '--help' ]]; then
 			mkdir_audit_log "$DAISY_CHAIN \"--help\"\n";
 			$DAISY_CHAIN "--help";
@@ -112,25 +137,9 @@ for item in "$@"; do
 			$DAISY_CHAIN "--version";
 			exit 0;
 		fi
-		regex="^-Z(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
 		regex="^--context[=]*(.*)$";
 		if [[ "$item" =~ $regex ]]; then
 		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^-m(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
 				addnext=1;
 			fi
 			options="$options $item";
@@ -144,16 +153,131 @@ for item in "$@"; do
 			options="$options $item";
 			continue;
 		fi
-		regex="^-.*$";
+		regex="^--.+$";# catch other double hyphen options
 		if [[ "$item" =~ $regex ]]; then
 			options="$options $item";
 			continue;
+		fi	
+		# these options can be mashed all together mostly
+		regex="^-([^-]+)$";# single hyphen option(s)
+		if [[ "$item" =~ $regex ]]; then
+			mashed="${BASH_REMATCH[1]}";
+			out_options="-";
+			out_flag=0;
+			olength=${#mashed};
+			# We need to process these options from left to right
+			for (( i=0; i<$olength; i++ )); do
+				ochar=${mashed:$i:1};
+				case "$ochar" in
+					[pv])  out_flag=1;# An option we want to keep
+						out_options="$out_options$ochar";
+						;;					
+					*) 	remainder=$((olength-i));
+						mashed=${mashed:$i:$remainder};# get remaining chars
+						break;
+				esac
+			done
+			# add these captured options if any
+			if [[ $out_flag -eq 1 ]]; then
+				options="$options $out_options";				
+			fi		
+			# The rest of these if I save them at all I want separated out.
+			# These options are special since if they were mashed with other
+			# options they would have to be at the end of the mess to be valid.	
+			regex="^m(.*)$"; # find any mode option
+			if [[ "$mashed" =~ $regex ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					addnext=1;
+				fi
+				options="$options -m${BASH_REMATCH[1]}";
+				continue;				
+			fi
+			regex="^Z(.*)$"; # find any SELinux security context
+			if [[ "$mashed" =~ $regex  ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					addnext=1;
+				fi
+				options="$options -Z${BASH_REMATCH[1]}";
+				continue;
+			fi
+			continue;
 		fi
 		files+=("$item");
+		add_escaped_file;
 	else
 		files+=("$item");
+		add_escaped_file;
 	fi
 done
+
+# At this point we have split options from directories.
+# We still need to filter out the SetUID and  SetGID from mode settings, 
+# which is easier to do cleanly by using regular expressions against the 
+# whole options string.
+
+doclean(){
+	regex=$1;
+	while [[ $options =~ $regex ]];
+	do
+		if [[ $notify -eq 1 ]]; then report=1; fi
+	    if [[ "${BASH_REMATCH[2]}" = "," ]];then
+		   options="${BASH_REMATCH[1]}${BASH_REMATCH[3]}";
+		else
+		   options="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}";
+		fi
+	done
+}
+notify=1;
+#echo "Fix the octal -m form of SetUID or SetGID"
+regex="(.*\s-m\s*)[234567]([0-7][0-7][0-7].*)";
+doclean $regex;
+#echo "Fix the octal --mode form of SetUID or SetGID"
+regex="(.*\s--mode\s*=*\s*)[234567]([0-7][0-7][0-7].*)";
+doclean $regex;
+options="$options ";# we need a trailing space for the clean up to work
+# Because the characters "ugo" can occur on either side of the "="
+regex="(.*\s)(--mode|-m)\s*=*\s*\S*[\+=-][rwxXtugo]+\S*\s(.*)";
+if [[ $options =~ $regex ]]; then
+	:
+	# We probably want to keep some of this.
+else
+	# eliminate any symbolic --mode setting that would be empty if we removed "s"
+	regex="(.*\s)--mode\s*=*\s*[^rwxXt[:space:]0-7]+\s(.*)";
+	doclean $regex;
+	# eliminate any symbolic -m setting that would be empty if we removed "s"
+	regex="(.*\s)-m\s*[^rwxXt[:space:]0-7]+\s(.*)";
+	doclean $regex;
+fi
+notify=1;
+# eliminate any "s" option in the symbolic --mode parameters
+regex="(.*\s--mode\s*=*\s*\S*[\+=-][^,[:space:]]*)s(.*)";
+doclean $regex;
+# eliminate any "s" option in the symbolic -m parameters
+regex="(.*\s-m\s*\S*[\+=-][^,[:space:]]*)s(.*)";
+doclean $regex;
+notify=0;
+# Clean up invalid --mode parameters
+regex="(.*\s--mode\s*=*\s*.*)[ouga]+[\+=-](,|\s)(.*)";
+doclean $regex;
+regex="(.*\s--mode\s*=*)[\+=-](,|\s)(.*)";
+doclean $regex;
+regex="(.*\s--mode\s*=*\S+),[\+=-](\s.*)";
+doclean $regex;
+# Clean up invalid -m parameters
+regex="(.*\s-m\s*.*)[ouga]+[\+=-](,|\s)(.*)";
+doclean $regex;
+regex="(.*\s-m\s*)[\+=-](,|\s)(.*)";
+doclean $regex;
+regex="(.*\s-m\s*\S+),[\+=-](\s.*)";
+doclean $regex;
+# Clean up trailing commas on mode options
+regex="(.*),+(\s.*)";
+doclean $regex;
+# Clean up extra space
+regex="(.*)\s(\s.*)";
+doclean $regex;
+
+if [[ $report -eq 1 ]]; then report_filtered; fi
 
 error_file=$(mktemp -t mkdir.XXXXXXXXXX);# temporary file for stderr output
 for directory in "${files[@]}"; do

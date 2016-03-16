@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# Copyright (c) Robert Taylor <rtaylor777 AT gmail DOT com> Sept 2013
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 #
@@ -133,6 +133,7 @@ for item in "$@"; do
 			fi
 			continue;
 		fi
+		# Handle double hyphen options first
 		if [[ "$item" = '--help' ]]; then
 			ln_audit_log "$DAISY_CHAIN \"--help\"\n";
 			$DAISY_CHAIN "--help";
@@ -143,25 +144,9 @@ for item in "$@"; do
 			$DAISY_CHAIN "--version";
 			exit 0;
 		fi
-		if [[ "$item" = '-T' ]]; then
-			destisfile=1;
-			options="$options $item";
-			continue;
-		fi
 		if [[ "$item" = '--no-target-directory' ]]; then
 			destisfile=1;
 			options="$options $item";
-			continue;
-		fi
-		regex="^-t(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			targetoption=1;
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				remnext=1;
-				gettarget=1;
-		    else
-		        dest="${BASH_REMATCH[1]}";
-		    fi
 			continue;
 		fi
 		regex="^--target-directory[=]*(.*)$";
@@ -173,14 +158,6 @@ for item in "$@"; do
 		    else
 		        dest="${BASH_REMATCH[1]}";
 		    fi
-			continue;
-		fi
-		regex="^-S(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
 			continue;
 		fi
 		regex="^--backup=(.*)$";
@@ -199,9 +176,60 @@ for item in "$@"; do
 			options="$options $item";
 			continue;
 		fi
-		regex="^-.*$";
+		regex="^--.+$";# catch other double hyphen options
 		if [[ "$item" =~ $regex ]]; then
 			options="$options $item";
+			continue;
+		fi	
+		# these options can be mashed all together mostly
+		regex="^-([^-]+)$";# single hyphen option(s)
+		if [[ "$item" =~ $regex ]]; then
+			mashed="${BASH_REMATCH[1]}";
+			out_options="-";
+			out_flag=0;
+			olength=${#mashed};
+			# We need to process these options from left to right
+			for (( i=0; i<$olength; i++ )); do
+				ochar=${mashed:$i:1};
+				case "$ochar" in
+					T)  destisfile=1; 
+						out_flag=1;# An option we want to keep
+						out_options="$out_options$ochar";
+						;;
+					[bdFfiLnPsv])  out_flag=1;# An option we want to keep
+						out_options="$out_options$ochar";
+						;;					
+					*) 	remainder=$((olength-i));
+						mashed=${mashed:$i:$remainder};# get remaining chars
+						break;
+				esac
+			done
+			# add these captured options if any
+			if [[ $out_flag -eq 1 ]]; then
+				options="$options $out_options";				
+			fi		
+			# The rest of these if I save them at all I want separated out.
+			# These options are special since if they were mashed with other
+			# options they would have to be at the end of the mess to be valid.	
+			regex="^t(.*)$";
+			if [[ "$mashed" =~ $regex ]]; then
+				targetoption=1;
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					remnext=1;
+					gettarget=1;
+				else
+					dest="${BASH_REMATCH[1]}";
+				fi
+				continue;
+			fi
+			regex="^S(.*)$";
+			if [[ "$mashed" =~ $regex ]]; then
+				if [[ -z "${BASH_REMATCH[1]}" ]]; then
+					addnext=1;
+				fi
+				options="$options -S${BASH_REMATCH[1]}";
+				continue;
+			fi
 			continue;
 		fi
 		if [[ -n "$lastitem" ]]; then
@@ -223,6 +251,10 @@ done
 # directories for the list.
 if [[ -n "$lastitem" ]]; then
 	if [[ $targetoption -eq 1 ]] || [[ $sourcenum -eq 0 ]]; then
+		if [[ $targetoption -eq 1 ]]; then
+			# the lastitem is a link name so sourcenum needs to be incremented
+			sourcenum=$[$sourcenum+1];
+		fi
 		files+=("$lastitem");
 		if [[ ! -d "$dest" ]] && [[ $targetoption -eq 1 ]]; then
 			echo 1>&2 "*** A target directory was indicated however either the destination";
@@ -236,6 +268,7 @@ if [[ -n "$lastitem" ]]; then
 			# for a link that is to be created in the current directory
 			filepart=$(basename "$lastitem");
 			dest="$pwd/$filepart";
+			destisfile=1;
 			real_target=$(readlink -f -- "$lastitem");
 			if [[ "$real_target" = "$dest" ]]; then
 				# there will be an error due to the link name and the target
@@ -282,6 +315,21 @@ if [[ -n "$lastitem" ]]; then
 			exit 1;
 		fi
 	fi
+else
+	if [[ $targetoption -eq 1 ]] && [[ "$dest" = "" ]]; then
+		echo 1>&2 "*** Missing target-directory option";
+		echo 1>&2 "*** See the \"$HOME/ln_syntax_errors.txt\" file for details";
+		error_text="A target-directory was indicated but no value was provided for it.\n";
+		report_errors "$error_text";
+		exit 1;
+	fi
+	if [[ $targetoption -eq 1 ]] && [[ $sourcenum -eq 0 ]]; then
+		echo 1>&2 "*** Missing file operand";
+		echo 1>&2 "*** See the \"$HOME/ln_syntax_errors.txt\" file for details";
+		error_text="A target-directory was indicated but no TARGET was indicated.\n";
+		report_errors "$error_text";
+		exit 1;
+	fi
 fi
 
 error_file=$(mktemp -t ln.XXXXXXXXXX);# temporary file for stderr output
@@ -322,6 +370,7 @@ for file in "${files[@]}"; do
 			continue;# skip this one
 		fi
 	fi
+	
 	$DAISY_CHAIN $options "$file" "$fulllinkname" 2>"$error_file" || error_code="$?";
 	ERROR=$(<"$error_file");
 	if [[ "$error_code" -ne 0 ]]; then
