@@ -24,3 +24,4 @@ fi
 cp /etc/group /tmp/group123456
 echo ${3}:x:${2}: | sort -t : -k3,3n -m /tmp/group123456 - > /etc/group
 
+exit 0;

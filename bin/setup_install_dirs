@@ -1,15 +1,36 @@
 #!/bin/bash
-# Author: Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
-# These lines add directories to the list....
-find /usr -type d > /root/installdirs.lst
-find /var -type d >> /root/installdirs.lst
-find /opt -type d >> /root/installdirs.lst
-find /lib -type d >> /root/installdirs.lst
-find /bin -type d >> /root/installdirs.lst
-find /sbin -type d >> /root/installdirs.lst
-find /etc -type d >> /root/installdirs.lst
-# This line removes some from the list...
-sed -i -e '/.usr.src/d' /root/installdirs.lst
-# These lines make the directories in the list install directories...
-chown 0:9999 $(cat /root/installdirs.lst)
-chmod ug=rwx,o=rxt $(cat /root/installdirs.lst)
+# Author: Robert Taylor
+# Date: Oct 2013
+# Instructions: Run this script as the root user after every package install.
+# Note: If you built the setup_install_dirs.c helper and SetUID=root you can
+#    run this command as a package user.
+# Overview: We initially set up new directories so that other packages can 
+#   install into them. The next time we run this script it will detect if the
+#   directory has things that belong to someone else in it and change the
+#   owner to root so as to protect the directory from removal.
+#
+# find directories that do not belong to the install group and process them
+
+search_dirs=$(echo /{usr,var,opt,lib,bin,sbin,etc});
+while IFS="" read -r -d "" dir ; do
+    chown :9999 "$dir";
+    chmod ug=rwx,o=rxt "$dir";
+done < <(find $search_dirs -not -path "/usr/src*" \
+    -type d -not -group install -print0)
+
+# Find directories that are not owned by root and process them
+while IFS="" read -r -d "" dir ; do
+    owner=$(stat -c%U -- "$dir");
+    is_shared=$(find $dir -not -path "/usr/src*" -not -user $owner -print0);
+    if [[ "$is_shared" != "" ]]; then
+        # Shared directory needs owner changed to root
+        chown 0:9999 "$dir";
+        chmod ug=rwx,o=rxt "$dir";
+    else
+        # The directory is not shared so all we want to confirm is the mode
+        # since the other loop ensures the group membership if that was changed
+        chmod ug=rwx,o=rxt "$dir";
+    fi  
+done < <(find $search_dirs -not -path "/usr/src*" \
+    -type d -not -user root -print0)
+exit 0;    

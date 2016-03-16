@@ -39,3 +39,4 @@ if [ "${#ugmatcher[@]}" = 1 ]; then
 fi
 
 "${0%_*}" "${ugmatcher[@]}"
+exit 0;

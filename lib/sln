@@ -8,17 +8,17 @@ UNLINK_BYPASS="";
 me=$(whoami);
 reportmsg="sln";
 for item in "$@"; do
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-	    regex="^(.*=)(.*['[:space:]].*)$";
-	    if [[ "$item" =~ $regex ]]; then
-			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
-		else
-			reportmsg="$reportmsg \"$item\"";
-		fi
-	else
-		reportmsg="$reportmsg $item";
-	fi
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
 done
 
 for p in $(type -ap sln) ; do
@@ -30,8 +30,15 @@ if [ -z "$DAISY_CHAIN" ]; then
   exit 1;
 fi
 
-if [ $UID -eq 0 ]; then
-  $DAISY_CHAIN "$@";
+error_code=0;
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
 
 for p in $(type -ap unlink) ; do
@@ -46,40 +53,49 @@ files=();
 owner="";
 pass_error=0;
 pwd=$(pwd);
-error_file=$(mktemp -t sln.XXXXXXXXXX);# temporary file for stderr output
 error_code=0;
 audit_text="";
+
+# An interesting issue arose when installing tcl8.6.0. The package is setting
+# a very restrictive umask for copy operations which resulted in the wrapper
+# creating read only temporary files, which caused the wrapper to fail.
+save_umask=$(umask);# backup the current umask
+umask 0077; # set a usable umask
+error_file=$(mktemp -t sln.XXXXXXXXXX);# temporary file for stderr output
+umask "$save_umask";# restore backed up umask
 
 # Because of multi-threading.. multiple line entries need to be done as one
 # one write to the log file.
 report_errors(){
-	text="\n";
-	text="$text ------sln command syntax errors-------------\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/sln_syntax_errors.txt";
+    text="\n";
+    text="$text ------sln command syntax errors-------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/sln_syntax_errors.txt";
 }
 report_owner_issues(){
-	text="\n";
-	text="$text ------link ownership issues-------------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/sln_owner_issues.txt";
+    text="\n";
+    text="$text ------link ownership issues-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/sln_owner_issues.txt";
 }
 sln_audit_log(){
-	text="\n";
-	text="$text ------ original command -------------\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text ------ one of the resulting commands actually run -------\n";
-	text="$text $1";
-	if [[ -n "$audit_text" ]]; then
-		text="$text error_code is: $error_code\n";
-		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
-		printf "$text" >>"$HOME/sln_errors.txt";
-	fi
-	# while debugging the wrapper you may wish to uncomment the following line
-	#printf "$text" >>"$HOME/sln_audit.txt";
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text ------ one of the resulting commands actually run -------\n";
+    text="$text $1";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/sln_errors.txt";
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all sln commands actually run
+        printf "$text" >>"$HOME/sln_audit.txt";
+    fi
 }
 
 # Syntax
@@ -92,95 +108,98 @@ sln_audit_log(){
 #
 
 do_sln(){
-	error_code=0;
-	audit_text="";
-	regex="(.*)/([^/]+)$";
-	if [[ "$option2" =~ $regex ]]; then
-		if [[ -n "${BASH_REMATCH[1]}" ]]; then
-			linkpath=$(readlink -f -- "${BASH_REMATCH[1]}");
-		else
-			linkpath="";
-		fi
-		linkname="${BASH_REMATCH[2]}";
-	else
-		linkpath="$pwd";
-		linkname="$option2";
-	fi
-	fulllinkname="$linkpath/$linkname";
-	if [[ -e "$option2" ]] || [[ -h "$option2" ]]; then
-		owner=$(stat -c%U -- "$fulllinkname");
-		if [[ "$owner" != "$me" ]]; then
-		    echo 1>&2 "*** The file: \"$fulllinkname\" is owned by \"$owner\" and not \"$me\"";
-			echo 1>&2 "*** See the \"$HOME/sln_owner_issues.txt\" file for details";
-			error_text="The file: $(echo \"$fulllinkname\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
-			error_text="$error_text$DAISY_CHAIN $(echo \"$option1\" | sed -e 's/%/%%/g') $(echo \"$option2\" | sed -e 's/%/%%/g')\n";
-			report_owner_issues "$error_text";
-			echo "$fulllinkname">>"$HOME/sln_owner_file_list.txt";
-			return;
-		fi
-	fi
-	if [[ -e "$option1" ]] || [[ -h "$option1" ]]; then		
-		$DAISY_CHAIN "$option1" "$option2" 2>"$error_file" || error_code="$?";
-		ERROR=$(<"$error_file");		
-		if [[ "$error_code" -ne 0 ]]; then
-			audit_text="ERROR: $ERROR";
-			echo "$ERROR" 1>&2; # output to stdout and stderr
-			pass_error="$error_code";
-		fi
-		sln_audit_log "$DAISY_CHAIN $(echo \"$option1\" | sed -e 's/%/%%/g') $(echo \"$option2\" | sed -e 's/%/%%/g')\n";
-	else
-		:
-		# The TARGET file or directory is missing.
-	fi
+    error_code=0;
+    audit_text="";
+    regex="(.*)/([^/]+)$";
+    if [[ "$option2" =~ $regex ]]; then
+        if [[ -n "${BASH_REMATCH[1]}" ]]; then
+            linkpath=$(readlink -f -- "${BASH_REMATCH[1]}");
+        else
+            linkpath="";
+        fi
+        linkname="${BASH_REMATCH[2]}";
+    else
+        linkpath="$pwd";
+        linkname="$option2";
+    fi
+    fulllinkname="$linkpath/$linkname";
+    if [[ -e "$option2" ]] || [[ -h "$option2" ]]; then
+        owner=$(stat -c%U -- "$fulllinkname");
+        if [[ "$owner" != "$me" ]]; then
+            echo 1>&2 "*** The file: \"$fulllinkname\" is owned by \"$owner\" and not \"$me\"";
+            echo 1>&2 "*** See the \"$HOME/sln_owner_issues.txt\" file for details";
+            error_text="The file: $(echo \"$fulllinkname\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+            error_text="$error_text$DAISY_CHAIN $(echo \"$option1\" | sed -e 's/%/%%/g') $(echo \"$option2\" | sed -e 's/%/%%/g')\n";
+            report_owner_issues "$error_text";
+            echo "$fulllinkname">>"$HOME/sln_owner_file_list.txt";
+            return;
+        fi
+    fi
+    if [[ -e "$option1" ]] || [[ -h "$option1" ]]; then     
+        $DAISY_CHAIN "$option1" "$option2" 2>"$error_file" || error_code="$?";
+        ERROR=$(<"$error_file");        
+        if [[ "$error_code" -ne 0 ]]; then
+            audit_text="ERROR: $ERROR";
+            echo "$ERROR" 1>&2; # output to stdout and stderr
+            pass_error="$error_code";
+        fi
+        sln_audit_log "$DAISY_CHAIN $(echo \"$option1\" | sed -e 's/%/%%/g') $(echo \"$option2\" | sed -e 's/%/%%/g')\n";
+    else
+        :
+        # The TARGET file or directory is missing.
+    fi
 }
 
 option1="$1";
 option2="$2";
 
 if [[ -n "$option2" ]]; then
-	do_sln;
+    do_sln;
 else
-	if [[ -e "$option1" ]]; then
-		# Special characters and spaces for parameters listed in the file
-		# should be quoted or escaped just like they would need to be on the
-		# command line. We need to escape the backslash to avoid losing it
-		# early in our processing.
-		filename=$(mktemp -t file.XXXXXXXXXX);# temporary file for sln options
-		sed -e 's/\\/\\\\/g' "$option1" > "$filename";
-		while read LINE; do
-			option1="";
-			option2="";
-		    files=();
-		    eval files+=("$LINE");
-			option1="${files[0]}";
-			option2="${files[1]}";
-			if [[ -n "$option2" ]]; then
-				do_sln;
-			fi
-		done < "$filename"
-		# if there was no linefeed on the last line...
-		if [[ -n "$LINE" ]] ; then
-			option1="";
-			option2="";
-		    files=();
-		    eval files+=("$LINE");
-			option1="${files[0]}";
-			option2="${files[1]}";
-			if [[ -n "$option2" ]]; then
-				do_sln;
-			fi
-		fi
-		$UNLINK_BYPASS "$filename";
-	else
-		echo 1>&2 "*** ERROR: With only one parameter, sln expects this to refer";
-		echo 1>&2 "*** to a file that contains a list of parameters.";
-		echo 1>&2 "*** See the \"$HOME/sln_syntax_errors.txt\" file for details";
-		error_text="ERROR: With only one parameter, sln expects this to refer\n";
-		error_text="$error_text to a file that contains a list of parameters.\n";
-		report_errors "$error_text\n";
-		$UNLINK_BYPASS "$error_file"; # remove temporary file
-		exit 1;
-	fi
+    if [[ -e "$option1" ]]; then
+        save_umask=$(umask);# backup the current umask
+        umask 0077; # set a usable umask
+        filename=$(mktemp -t file.XXXXXXXXXX);# temporary file for sln options
+        umask "$save_umask";# restore backed up umask
+        # Special characters and spaces for parameters listed in the file
+        # should be quoted or escaped just like they would need to be on the
+        # command line. We need to escape the backslash to avoid losing it
+        # early in our processing.      
+        sed -e 's/\\/\\\\/g' "$option1" > "$filename";
+        while read LINE; do
+            option1="";
+            option2="";
+            files=();
+            eval files+=("$LINE");
+            option1="${files[0]}";
+            option2="${files[1]}";
+            if [[ -n "$option2" ]]; then
+                do_sln;
+            fi
+        done < "$filename"
+        # if there was no linefeed on the last line...
+        if [[ -n "$LINE" ]] ; then
+            option1="";
+            option2="";
+            files=();
+            eval files+=("$LINE");
+            option1="${files[0]}";
+            option2="${files[1]}";
+            if [[ -n "$option2" ]]; then
+                do_sln;
+            fi
+        fi
+        $UNLINK_BYPASS "$filename";
+    else
+        echo 1>&2 "*** ERROR: With only one parameter, sln expects this to refer";
+        echo 1>&2 "*** to a file that contains a list of parameters.";
+        echo 1>&2 "*** See the \"$HOME/sln_syntax_errors.txt\" file for details";
+        error_text="ERROR: With only one parameter, sln expects this to refer\n";
+        error_text="$error_text to a file that contains a list of parameters.\n";
+        report_errors "$error_text\n";
+        $UNLINK_BYPASS "$error_file"; # remove temporary file
+        exit 1;
+    fi
 fi
 $UNLINK_BYPASS "$error_file"; # remove temporary file
 exit "$pass_error";

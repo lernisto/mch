@@ -1,0 +1,14 @@
+#!/bin/bash
+# Author: Robert Taylor
+# Date: Dec 5, 2013
+# Should be run as a package user.
+# Parse through the passed parameters and add them as dependents in the 
+# $HOME/.project file.
+project_file="$HOME/.project";
+for entry in "$@"; do
+  foundentry=$(grep -i "$entry" "$project_file");
+  if [[ -z "$foundentry" ]]; then
+    sed -i -e "/DOWNLOAD LOCATION:/ i \  $entry" "$project_file";
+  fi;
+done
+exit 0;

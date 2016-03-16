@@ -1,0 +1,38 @@
+#!/bin/bash
+# Author: Robert Taylor
+# Date: Oct 23, 2013
+# Should be run as root.
+# Get the list of package users from the /etc/passwd file (same names as groups)
+package_list+=$(cat /etc/passwd|awk -F: '{if($3>9999) print $1 }'|sort);
+# If you wish to add other groups to the list to strip this is how...
+group_name="root";
+line_feed=$'\n';
+package_list="$package_list$line_feed$group_name";
+# If you wish to process certain groups again remove them from the list in
+# the file /root/stripped_files_list
+# If you wish to prevent stripping of files owned by a particular group add
+# the group name to /root/stripped_files_list before running this script.
+stripped_files_list="";
+if [[ -e "/root/stripped_files_list" ]]; then
+   stripped_files_list=$(cat /root/stripped_files_list);
+fi
+while read -r line; do
+    found=0;
+    while read -r i; do
+      if [[ "$i" = "$line" ]]; then
+          found=1;
+          break;
+      fi
+    done <<< "$stripped_files_list";
+    if [[ $found -eq 0 ]]; then 
+        echo "Stripping $line ...";
+        find /{,usr/,usr/local/}{bin,lib,sbin} -type f -group $line \
+          -exec /usr/bin/strip --strip-debug '{}' ';'
+        # we survived stripping this package so lets add it to the list
+        # of stripped packages
+        echo "$line" >> "/root/stripped_files_list";
+    else 
+        echo "Skipping stripping for $line ...";
+    fi    
+done <<< "$package_list"
+exit 0;

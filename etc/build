@@ -3,180 +3,765 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 #
-# Changed by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# Changed by Robert Taylor <rtaylor777 AT gmail DOT com> Nov 2013
+# Merged ideas furnished by Dan McGhee
+# 
 
 # This script will build a package based on the commands in $HOME/build.conf
 # It can be called with the following parameters that
 # will cause it to execute the respective *_commands() functions. If it is
 # called with no parameter, that is equivalent to
-# build unpack patch configure make check install clean
+# ./build unpack patch configure make check install post-install finalize
+# ./build clean is normally called by the finalize stage but may be called
+# directly as well.
 #
-# It will create 8 log files in the $HOME directory:
-#   configure.log: All messages output during configure
-#   configure.err: Just the errors output during configure
-#   check.log: All messages output during checking
-#   check.err: Just the errors output during checking
-#   make.log: All messages output during make
-#   make.err: Just the errors output during make
-#   install.log: All messages output during make install
-#   install.err: Just the errors output during make install
+# If a user defined function, sourced from build.conf, is missing it will be
+# silently skipped and there will be no logs for that step.
+#
+# Log files are created for patch, configure, check, make, install and 
+# postinstall, if the corresponding functions are run.
+# The script will create log files in the $HOME/$pkg_owner-logs directory:
+#   patch-$pkg_owner.log: All messages output during patching
+#   patch-$pkg_owner.err: Just the errors output during patching
+#   configure-$pkg_owner.log: All messages output during configure
+#   configure-$pkg_owner.err: Just the errors output during configure
+#   check-$pkg_owner.log: All messages output during checking
+#   check-$pkg_owner.err: Just the errors output during checking
+#   make-$pkg_owner.log: All messages output during make
+#   make-$pkg_owner.err: Just the errors output during make
+#   install-$pkg_owner.log: All messages output during make install
+#   install-$pkg_owner.err: Just the errors output during make install
+#   post-install-$pkg_owner.log: All messages output during post install
+#   post-install-$pkg_owner.err: Just the errors output during post install
 #
 # After running the script you should check the *.err files to see
 # if any problems have occurred. If that is the case, use the corresponding
 # *.log files to see the error messages in context.
 #
 
-build_script="$(readlink -f "$0")"
+# need to set pkg_owner before sourcing build.conf
+pkg_owner=$(whoami);
 
-cd  # go HOME
+# Since a number of packages do not support building in a separate build
+# directory it makes sense to permit turning the use of a separate build 
+# directory on and off.
+use_build_dir=1; #default to using a separate build directory
 
-source "$HOME"/build.conf
+patch_path="/patches";
 
-if [ "_$(whoami)" != _root ]; then
-  export PACKAGE_OWNER="$(whoami)"
+# To avoid having the build scripts internal variable's states fiddled with by 
+# what is in the build.conf file, source it first.
+source "$HOME"/build.conf;
+
+# Get to a known state for the PATH environment variable (this function is
+# sourced from the /etc/pkgusr/bash_profile)
+establish_path;
+cd  # go HOME, this is the default directory for the unpack and clean stages.
+
+# Make sure nothing has messed with this variable
+pkg_owner=$(whoami);
+
+# Track the pause after status, can be overridden in build.conf
+pause_after_status_file=$(mktemp -t "$pkg_owner"_pause_status.XXXXXXXXXX);
+echo 0 > "$pause_after_status_file";# Initialize
+
+set_pause_after_status(){
+   # Lets limit what can be passed back from the subshells to simply 0 or 1
+   if [[ -e "$pause_after_status_file" ]];then
+       temp=$(cat "$pause_after_status_file");
+   else
+       temp=0;
+   fi   
+   if [[ "$temp" -eq 0 ]]; then
+       pause_after_status=0;
+   else
+       pause_after_status=1;
+   fi
+}
+set_pause_after_status;# Initialize
+
+# Track the functional step that we are working on
+current_step="Before Unpacking"; # Initialize
+build_status="succeeded!"; # set to FAILED! by test_pipe()
+
+# Initialize paths
+log_path="$HOME/$pkg_owner-logs";
+build_path="$HOME/$pkg_owner-build";
+sources_path="/sources";
+pkg_source="";
+
+if [[ -f "$HOME/build.state" ]]; then
+    source "$HOME"/build.state;
 fi
+persist_build_state(){
+    echo "# This is an internal state persistence file for the build script." > "$HOME"/build.state;
+    echo "# If you delete this file, build will be unable to clean up from " >> "$HOME"/build.state;
+    echo "# a previous run and will assume it is starting with a clean slate." >> "$HOME"/build.state;
+    echo "# Use \"./build clean\" to remove this file and clean up extracted" >> "$HOME"/build.state;
+    echo "# package source directories and the package build directory." >> "$HOME"/build.state;
+    echo "pkg_source=\"$pkg_source\";" >> "$HOME"/build.state;
+    echo "current_step=\"$current_step\";" >> "$HOME"/build.state;
+}
+
+output_exit_text(){
+        echo "-------------------------------------------------------------";
+        echo "The \"$current_step\" stage has just completed and has $build_status.";
+        echo "Check the log files in: $log_path/";
+        echo "to decide if you wish to re-run this stage or to continue with";
+        echo "the next stage of the build.";
+        echo "Run \"./build\" to re-run this stage, or \"./build next\" to";
+        echo "continue with the next and following stages.";
+        echo "-------------------------------------------------------------";
+}
+
+check_pause_after_status(){
+    set_pause_after_status;# Collect any possible change from subshell
+    if [[ "$pause_after_status" -eq 1 ]]; then          
+        output_exit_text;
+        remove_pause_after_status_file;# clean up before exiting
+        exit 0;
+    fi
+}
 
 
- # This function auto-extracts tarballs based on PATTERNS (see build.conf) inside
- # the directory $HOME/xxxbuild and
- # cds into the fist directory created by the first tarball. This is also
- # stored in the variable $srcdir.
+pause_after_this(){
+    # pass back value from subshell
+    echo 1 > "$pause_after_status_file";
+}
+
+remove_pause_after_status_file(){
+    if [[ -e "$pause_after_status_file" ]]; then
+        $RM_BYPASS "$pause_after_status_file";
+    fi
+}
+
+# For performance reasons, get a reference to the real rm command
+for p in $(type -ap rm) ; do
+  if [[ "$p" != "/usr/lib/pkgusr/rm" ]]; then RM_BYPASS="$p"; break ; fi
+done
+
+# Create directories if missing
+create_directories_if_missing(){    
+    if [[ ! -d "$log_path" ]]; then
+        mkdir "$log_path" || echo "ERROR creating $log_path";
+    fi
+    if [[ $use_build_dir -eq 1 ]];then
+      if [[ ! -d "$build_path" ]]; then
+        mkdir "$build_path" || echo "ERROR creating $build_path";
+      fi
+    fi
+}
+
+# Establish where we are working
+cd_to_build_dir(){
+    if [[ $use_build_dir -eq 1 ]];then
+      if [[ -d "$build_path" ]]; then
+         cd "$build_path" || return 1        
+      else
+         cd "$pkg_source" || return 1
+      fi
+    else
+       cd "$pkg_source" || return 1
+    fi
+    echo "Present working directory is: $(pwd)";
+}
+# Go to source directory
+cd_to_source_dir(){
+    cd "$pkg_source" || return 1
+    echo "Present working directory is: $(pwd)";
+}
+
+# Global variables for pattern find
+archive="";
+pattern="";
+# Set archive variable given a particular pattern from PATTERN
+set_archive_from_pattern()
+{ :  
+    archive="";# make sure any previous value is cleared
+    found_count=0;
+    echo "Looking for archive in: $HOME";
+    while IFS="" read -r -d "" file ; do
+        if [[ "$found_count" -eq 0 ]]; then
+            archive="$file";
+        elif [[ "$found_count" -eq 1 ]]; then
+            echo "WARNING: The PATTERN \"$pattern\" matched more than one file";
+        fi
+        # Increment the found_count
+        found_count=$[$found_count+1];
+    done < <(find "$HOME" -maxdepth 1 -type f -name "*$pattern*" -print0);
+    if [[ ! -f "$archive" ]]; then       
+        echo "Looking for archive in : $sources_path";
+        archive="";
+        found_count=0;
+        while IFS="" read -r -d "" file ; do
+            if [[ "$found_count" -eq 0 ]]; then
+                archive="$file";
+            elif [[ "$found_count" -eq 1 ]]; then
+                echo "WARNING: The PATTERN \"$pattern\" matched more than one file";
+            fi
+            # Increment the found_count
+            found_count=$[$found_count+1];
+        done < <(find "$sources_path" -maxdepth 1 -type f -name "*$pattern*" -print0);
+    fi
+}
+# This function auto-extracts tarballs based on PATTERNS (see build.conf).
 unpack_commands()
 { :
-  export srcdir=""
-  rm -rf "$HOME/xxxbuild"
-  mkdir -p "$HOME/xxxbuild" 
-  cd "$HOME/xxxbuild" || return 1
-  
-  for p in $PATTERNS ; do
-    for archive in "$HOME"/*"$p"* ; do
-      dir=""
-      if [ -f "$archive" ]; then
-        case z"$archive" in
-          z*.tar.bz2) dir=$(tar tjf "$archive" | grep / | head -n 1) ; tar xjf "$archive"  ;;
-          z*.tar.gz)  dir=$(tar tzf "$archive" | grep / | head -n 1) ; tar xzf "$archive"  ;;
-          z*.tar.xz)  dir=$(tar tJf "$archive" | grep / | head -n 1) ; tar xJf "$archive"  ;;
-        esac
-      fi
-      dir=${dir##./}
-      test -z "$dir" && echo 1>&2 "Error extracting $archive"
-      test -z "$srcdir" && srcdir=${dir%%/*}
-    done
-  done
-  
-  test -z "$srcdir" && { echo 1>&2 "Source directory not found" ; return 1 ; }
-  ln -s "$srcdir" yyysrc
+  cd $HOME; # go HOME, this is the default directory for the unpack and clean stages.
+  echo "Cleaning up from a previous build if any...";
+  # When we start over with the unpack step, we assume we want a clean build
+  # from the beginning. So lets remove contents of log_path, build_path and
+  # the extracted package source directory.
+  if [[ -e "$log_path" ]]; then
+    $RM_BYPASS -rf $(echo "$log_path/*");
+  fi
+  if [[ -e "$build_path" ]]; then
+    $RM_BYPASS -rf $(echo "$build_path/*");
+  fi
+  if [[ -e "$pkg_source" ]]; then
+    $RM_BYPASS -rf "$pkg_source";
+  fi
+  if [[ -e "$HOME/build.state" ]]; then
+    $RM_BYPASS -rf "$HOME"/build.state;
+  fi
+  pkg_source="";# Now that we have cleaned up, reset this value
+  error_code=0; # Initialize a return value.
+  echo "PATTERNS string is set to: $PATTERNS";
+  for pattern in $PATTERNS; do
+    dir="";    
+    set_archive_from_pattern;    
+    if [[ -f "$archive" ]]; then
+        echo "Processing archive: $archive";   
+        dir=$(tar -tf "$archive" | grep / | head -n 1); 
+        if [[ -z "$dir" ]]; then
+           echo "Root directory not found in archive, overriding...";
+           dir="$pkg_owner";
+           mkdir "$HOME/$pkg_owner";
+           cd "$HOME/$pkg_owner";
+        fi
+        dir=${dir##./};# remove any ./ prefix
+        tar -xf "$archive" || error_code="$?";
+    else
+        echo "Unable to find archive";
+        return 1;
+    fi
+    if [[ -z "$pkg_source" ]]; then
+        # only set this once for the first package extracted
+        pkg_source="$HOME/${dir%%/*}";      
+        persist_build_state;
+    fi
+  done  
+  if [[ -z "$pkg_source" ]]; then
+      echo 1>&2 "Source directory not found";
+      return 1;
+  fi
+  echo "pkg_source is set to: $pkg_source";
+  return "$error_code";
 }
+
+# [RT] edit_project_file convenience function.
+# This function will edit the .project file. It has been designed
+# to update sections that have the default identifying text and should
+# not overwrite any manual edits. You should run this only after updating
+# the build.conf file to accurately identify the archives involved and to
+# have the patches lines refer to real patches if used. The existence of
+# a wget-list file containing download URLS for the archives and patches and 
+# the existence of an md5sums file containing md5 sums for the archives and 
+# patches will increase the value of the updates that this function does.
+# All wget-list files found in $HOME and $sources_path will be searched for 
+# package archive URLs. The first URL match found will be used.
+# All wget-list files found in $HOME, $patch_path and $sources_path will be
+# searched for patch URLs. The first URL match found will be used.
+# The same search strategy is used for the md5sums files.
+# The only overwrite of actual data lines in the file will be of the date in
+# the LAST UPDATED field and this line is identified by the text "(Y-M-D)".
+# Change the "(Y-M-D)" text in the .project file and you can assume the
+# responsibility for updating the LAST UPDATED field.
+edit_project_file()
+{ :
+  echo "Editing the .project file"; 
+  echo "Updating the LAST UPDATED field";
+  # may be setting date to UTC, adjust if desired
+  DATE=$(date +%Y-%m-%d);
+  # Replace Date_text
+  sed -i -e "s/<Date_text>/$DATE (Y-M-D)/" .project
+  # Update existing date text
+  sed -i -e "/(Y-M-D)/ c \  $DATE (Y-M-D)" .project
+  echo "Updating the CONTENTS field";
+  # Replace pkg_owner.lst
+  sed -i -e "s/<pkg_owner.lst>/$pkg_owner.lst/" .project  
+  main_archive_name="";
+  echo "Using the PATTERNS found in build.conf to locate archives for this package.";
+  for pattern in $PATTERNS; do
+     echo "Current pattern is: $pattern";
+     set_archive_from_pattern;
+     if [[ -z $archive ]]; then
+       echo "Unable to locate an archive to match pattern: $pattern";
+       continue;
+     fi
+     archive_name=$(basename "$archive");
+     echo "archive_name = $archive_name";
+     if [[ -z "$main_archive_name" ]]; then
+        main_archive_name=$archive_name;
+        echo "Updating the DESCRIPTION: to include the main archive file name";
+        sed -i -e "s/<package_name>/Main package archive: $main_archive_name/" .project
+     fi
+     # update the DOWNLOAD LOCATION section
+     echo "Looking for a matching download URL for the package in wget-list.";
+     download=""; #initialize
+     wget_list_sources="$HOME"/wget-list;        
+     if [[ -e "$wget_list_sources" ]]; then
+        download=$(grep "$archive_name" "$wget_list_sources");                 
+     fi
+     if [[ -z "$download" ]]; then        
+        wget_list_sources="$sources_path"/wget-list;
+        if [[ -e "$wget_list_sources" ]]; then
+           download=$(grep "$archive_name" "$wget_list_sources");
+        fi
+     fi
+     if [[ ! -e "$wget_list_sources" ]]; then
+        echo "Unable to find wget-list file for package sources.";
+        echo "We searched the $HOME directory and $sources_path".;
+        echo "DOWNLOAD LOCATION: will not be updated.";
+     fi
+     if [[ -z "$download" ]]; then
+       echo "Unable to find URL in any wget-list for $archive_name";
+     else
+       echo "download = $download";
+       echo "Updating the DOWNLOAD LOCATION: to include the URL(s) found in wget-list";
+       # Only want to add this particular download once to the .projects file
+       foundentry=$(grep -i "$download" .project);
+       if [[ -z "$foundentry" ]]; then 
+         # insert line before the text MD5SUMS:
+         sed -i -e "/MD5SUMS:/ i \  $download" .project; 
+       fi
+       # no need to have this <urltext> place holder so remove it...
+       sed -i -e "/<urltext>/ d" .project;
+     fi
+     # update the MD5SUMS: section
+     echo "Looking for a matching MD5SUM for the package in md5sums.";
+     md5sum=""; #initialize
+     md5sum_file="$HOME"/md5sums;        
+     if [[ -e "$md5sum_file" ]]; then
+        md5sum=$(grep "$archive_name" "$md5sum_file");                 
+     fi
+     if [[ -z "$md5sum" ]]; then        
+        md5sum_file="$sources_path"/md5sums;
+        if [[ -e "$md5sum_file" ]]; then
+           md5sum=$(grep "$archive_name" "$md5sum_file");
+        fi
+     fi
+     if [[ ! -e "$md5sum_file" ]]; then
+        echo "Unable to find and md5sums file to locate an md5sum of the package.";
+        echo "We searched the $HOME directory and $sources_path".;
+        echo "MD5SUMS: will not be updated.";
+     fi
+     if [[ -z "$md5sum" ]]; then
+       echo "Unable to find an md5sum in any md5sums file for $archive_name";
+     else
+       echo "md5sum = $md5sum";
+       echo "Updating the MD5SUMS: to include the md5sum found in the md5sums file";
+       # Only want to add this particular md5sum once to the .projects file
+       foundentry=$(grep -i "$md5sum" .project);
+       if [[ -z "$foundentry" ]]; then 
+         # insert line before the text WEB SITE:
+         sed -i -e "/WEB SITE:/ i \  $md5sum" .project; 
+       fi
+       # no need to have this <urltext> place holder so remove it...
+       sed -i -e "/<md5text>/ d" .project;
+     fi     
+  done  
+  echo "Determining if patches were used for this package.";
+  patch_lines=$(grep "\$patch_path\"/" $HOME/build.conf);
+  desired_patch_line_found=0;
+  while read -r line; do
+    regex="^[^#]*patch.*/([^/]+)$";  
+    if [[ "$line" =~ $regex ]]; then
+       if [[ -z "${BASH_REMATCH[1]}" ]]; then
+         echo "Problem determining patch file name";
+       else      
+         desired_patch_line_found=1;
+         patch_name="${BASH_REMATCH[1]}";        
+         # Updating the DOWNLOAD LOCATION: section       
+         download=""; #initialize
+         wget_list_patches="$HOME"/wget-list;        
+         if [[ -e "$wget_list_patches" ]]; then
+            download=$(grep "$patch_name" "$wget_list_patches");                   
+         fi
+         if [[ -z "$download" ]]; then        
+            wget_list_patches="$patch_path"/wget-list;
+            if [[ -e "$wget_list_patches" ]]; then
+               download=$(grep "$patch_name" "$wget_list_patches");
+            fi
+         fi
+         if [[ -z "$download" ]]; then        
+            wget_list_patches="$sources_path"/wget-list;
+            if [[ -e "$wget_list_patches" ]]; then
+               download=$(grep "$patch_name" "$wget_list_patches");
+            fi
+         fi
+         if [[ ! -e "$wget_list_patches" ]]; then
+            echo "Unable to find wget-list file for package patches.";
+            echo "We searched the $HOME directory, $patch_path and $sources_path".;
+            echo "DOWNLOAD LOCATION: will not be updated.";
+         fi      
+         if [[ -z "$download" ]]; then
+          echo "Unable to find URL in any wget-list for $patch_name";
+         else
+           echo "download = $download";
+           echo "Updating the DOWNLOAD LOCATION: to include the URL(s) found in wget-list";
+           # Only want to add this particular download once to the .projects file
+           foundentry=$(grep -i "$download" .project);
+           if [[ -z "$foundentry" ]]; then 
+             # insert line before the text MD5SUMS:
+             sed -i -e "/MD5SUMS:/ i \  $download" .project;         
+           fi
+           # no need to have this <urltext> place holder so remove it...
+           sed -i -e "/<urltext>/ d" .project;
+         fi
+         # Updating the MD5SUMS: section
+         echo "Looking for a matching MD5SUM for the patch in md5sums.";
+         md5sum=""; #initialize
+         md5sum_file="$HOME"/md5sums;        
+         if [[ -e "$md5sum_file" ]]; then
+            md5sum=$(grep "$patch_name" "$md5sum_file");                   
+         fi
+         if [[ -z "$md5sum" ]]; then        
+            md5sum_file="$patch_path"/md5sums;
+            if [[ -e "$md5sum_file" ]]; then
+               md5sum=$(grep "$patch_name" "$md5sum_file");
+            fi
+         fi
+         if [[ -z "$md5sum" ]]; then        
+            md5sum_file="$sources_path"/md5sums;
+            if [[ -e "$md5sum_file" ]]; then
+               md5sum=$(grep "$patch_name" "$md5sum_file");
+            fi
+         fi
+         if [[ ! -e "$md5sum_file" ]]; then
+            echo "Unable to find an md5sums file to locate an md5sum of the patch.";
+            echo "We searched the $HOME directory, $patch_path and $sources_path".;
+            echo "MD5SUMS: will not be updated.";
+         fi
+         if [[ -z "$md5sum" ]]; then
+            echo "Unable to find an md5sum in any md5sums file for $patch_name";
+         else
+            echo "md5sum = $md5sum";
+            echo "Updating the MD5SUMS: to include the md5sum found in the md5sums file";
+            # Only want to add this particular md5sum once to the .projects file
+            foundentry=$(grep -i "$md5sum" .project);
+            if [[ -z "$foundentry" ]]; then 
+               # insert line before the text WEB SITE:
+               sed -i -e "/WEB SITE:/ i \  $md5sum" .project; 
+            fi
+            # no need to have this <urltext> place holder so remove it...
+            sed -i -e "/<md5text>/ d" .project;
+         fi 
+       fi
+    fi    
+  done <<< "$patch_lines";  
+  if [[ $desired_patch_line_found -eq 0 ]]; then
+      echo "No uncommented patch lines were found in the build.conf file";
+  fi
+}   
 
 clean_commands()
 {
-  rm -rf "$HOME/xxxbuild"
+  if [[ -e "$build_path" ]]; then
+    echo "Removing $build_path";
+    $RM_BYPASS -rf "$build_path";
+  fi
+  if [[ -e "$pkg_source" ]]; then
+    echo "Removing $pkg_source";
+    $RM_BYPASS -rf "$pkg_source";
+  fi
+  if [[ -e "$HOME/build.state" ]]; then
+    echo "Removing $HOME/build.state";
+    $RM_BYPASS -rf "$HOME"/build.state;
+  fi
+  echo "Removing /tmp/* owned by $pkg_owner";
+  find /tmp -user "$pkg_owner" -exec $RM_BYPASS -rf {} \;
 }
 
 test_pipe()
 {
   for i in "${PIPESTATUS[@]}" 
   do
-    test $i != 0 && { echo FAILED! ; exit 1 ; }
+    test $i != 0 && { build_status="FAILED!"; echo "$current_step $build_status"; output_exit_text; remove_pause_after_status_file; exit 1 ; }
   done
-  echo successful!
-  return 0
+  echo "$current_step $build_status";
+  return 0;
 }
 
 if [ $# -eq 0 ]; then
-  set -- unpack patch configure make check root_pre_install install root_post_install
-  # I removed "clean" from the end of the above default parameters
+    # You get in here if you ran "./build" without any parameters.
+    # The logic here is, if the build process stopped at some point it is
+    # likely due to an error at that stage. So to pick up where we were at
+    # with the next build run we simply reprocess that stage and any others
+    # that follow. You can start over by running build with the 'all' parameter.
+    # You can directly specify any stage you desire to run and thereby manually
+    # override this logic.
+    case "_$current_step" in
+      _Patching)
+          set -- patch configure make check install post-install finalize
+          ;;
+      _Configuring)
+          set -- configure make check install post-install finalize
+          ;;
+      _Make)
+          set -- make check install post-install finalize
+          ;;
+      _Checking)
+          set -- check install post-install finalize
+          ;;
+      _Installing)
+          set -- install post-install finalize
+          ;;
+      "_Post Install")
+          set -- post-install finalize
+          ;;
+      "_Finalize")
+          set -- finalize
+          ;;
+      *)
+          set -- unpack patch configure make check install post-install finalize
+          ;;
+     esac
+fi
+if [[ "$1" = "next" ]]; then
+    # You get in here if you ran "./build next".
+    # The logic here is, if the build process stopped at some point and you 
+    # want to continue with the remaining steps you can simply run 
+    # "./build next". If you run "./build next" before any stage has been run
+    # it will process all the steps.
+    case "_$current_step" in
+      _Unpacking)
+          set -- patch configure make check install post-install finalize
+          ;;
+      _Patching)
+          set -- configure make check install post-install finalize
+          ;;
+      _Configuring)
+          set -- make check install post-install finalize
+          ;;
+      _Make)
+          set -- check install post-install finalize
+          ;;
+      _Checking)
+          set -- install post-install finalize
+          ;;
+      _Installing)
+          set -- post-install finalize
+          ;;
+      "_Post Install")
+          set -- finalize
+          ;;
+      "_Finalize")
+          set -- finalize
+          ;;
+      *)
+          set -- unpack patch configure make check install post-install finalize
+          ;;
+     esac
+fi
+regex="^.*(help)|(\?).*$"; # contains help or ?
+if [[ "$1" =~ $regex ]]; then
+    echo "----------------------------------------------------------";
+    echo "USAGE:";
+    echo "./build [parameters]";
+    echo "BUILD STAGES:";
+    echo "unpack patch configure make check install post-install finalize";
+    echo "    Stages can be specified as a space separated list after the build";
+    echo "      command.";
+    echo "    User defined commands which are run in all but the unpack stage are";
+    echo "      specified in the build.conf file. See this file for more info.";
+    echo "EXAMPLES:";
+    echo "\"./build\". If run without parameters the build script will run";
+    echo "      through all \"build\" stages if this is the first time it is run, ";
+    echo "      or it will pick up with the current stage and reprocess it and all";
+    echo "      remaining stages.";    
+    echo "\"./build next\" will pick up with the next stage and process it and";
+    echo "      all remaining stages.";
+    echo "\"./build all\" will run through all \"build\" stages from the start.";
+    echo "\"./build make\". This is an example of calling build with just the";
+    echo "      make stage specified. You can specify any or all stages as a";
+    echo "      parameter and the build script will only process those specified";
+    echo "      stages.";
+    echo "\"./build clean\" will clean up from the previous build run if any.";
+    echo "      The clean step is usually called in the finalize stage.";
+    echo "\"./build edit_project_file\" will auto-populate the .project file.";
+    echo "      This function requires that build.conf has been correctly configured.";
+    echo "      So this function should usually be called in the finalize stage.";
+    echo "\"./build help|?\" produces this help message.";
+    echo "\"./build state|status|stage\" will output a summary of where the build";
+    echo "      script thinks it is at in the build process.";
+    echo "----------------------------------------------------------";
+    remove_pause_after_status_file;
+    exit 0;
+fi
+regex="^.*(status)|(state)|(stage).*$"; # contains state, status or stage
+if [[ "$1" =~ $regex ]]; then
+    echo "----------------------------------------------------------";
+    if [[ -f "$HOME/build.state" ]]; then
+        echo "The current stage in the build process is: \"$current_step\".";
+        echo "The extracted package source is in: \"$pkg_source\"";
+        echo "The build directory being used is: \"$build_path\"";
+        echo "The build logs are being stored in: \"$log_path\"";
+        echo "Run \"./build\" with no parameters to reprocess this stage and";
+        echo "    continue with the remaining stages.";
+        echo "Run \"./build next\" to continue with the next stage and all";
+        echo "    remaining stages";
+        echo "Run \"./build help\" for more help with the build script.";
+    else
+        echo "The current stage in the build process is: \"$current_step\".";
+        echo "To start the build process you can run \"./build\" with no"; 
+        echo "parameters. Make sure that you have edited the build.conf file"; 
+        echo "to run your desired commands before running the build script.";
+    fi    
+    echo "----------------------------------------------------------";
+    remove_pause_after_status_file;
+    exit 0;
 fi
 
 while [ -n "$1" ]; do
+  # By default, wrapper status changes here are not persisted back to the shell.
+  disable_wrappers; # Start with wrappers disabled, we enable when required
   case "_$1" in
     _all)
         shift 1
-        set -- dummy unpack patch configure make check root_pre_install install root_post_install clean "$@"
-        ;;
-        
+        set -- dummy unpack patch configure make check install post-install finalize
+        ;;        
     _unpack)
-        echo -n Unpacking...
-        unpack_commands # no logging for unpack necessary 
-        test_pipe
-        ;;
-   
+        current_step="Unpacking";
+        echo "$current_step...";
+        create_directories_if_missing;
+        unpack_commands; # no logging for unpack necessary 
+        test_pipe;
+        ;;   
     _patch)
-        cd "$HOME/xxxbuild/yyysrc" && srcdir="$(pwd)" || exit 1
-        patch_commands # no logging for patch necessary 
-        #test_pipe
-        ;;
-
-    _configure)
-        cd "$HOME/xxxbuild/yyysrc" && srcdir="$(pwd)" || exit 1
-        echo -n Configuring...
-
-        { configure_commands 3>&1 1>&2 2>&3 | tee "$HOME/configure.err" ;} &>"$HOME/configure.log"
-        test_pipe
-        # NOTE: Simply using && instead of test_pipe would not work, because &&
-        # only tests the exit status of the last command in the pipe, which is tee.
-        ;;
-
-    _make)
-        cd "$HOME/xxxbuild/yyysrc" && srcdir="$(pwd)" || exit 1
-        echo -n Building...
-
-        { make_commands 3>&1 1>&2 2>&3 | tee "$HOME/make.err" ;} &>"$HOME/make.log"
-        test_pipe
-        ;;
-
-    _check)
-        cd "$HOME/xxxbuild/yyysrc" && srcdir="$(pwd)" || exit 1
-        echo -n Checking...
-
-        { check_commands 3>&1 1>&2 2>&3 | tee "$HOME/check.err" ;} &>"$HOME/check.log"
-        test_pipe
-        ;;
-    
-    _root_pre_install)
-        if type root_pre_install_commands &>/dev/null ; then
-          if [ _$(whoami) != _root ]; then
-            su --preserve-environment root -c "HOME='$HOME' '$build_script' root_pre_install" || exit 1
-          else  
-            echo -n "Preparing for install(root)..."
-  
-            { root_pre_install_commands 3>&1 1>&2 2>&3 | tee "$HOME/preinstall.err" ;} &>"$HOME/preinstall.log"
+        fname=$(declare -f -F patch_commands);
+        current_step="Patching"; 
+        persist_build_state;
+        if [[ -n "$fname" ]]; then
+            echo "$current_step...";
+            create_directories_if_missing;
+            cd_to_source_dir;
+            { patch_commands 3>&1 1>&2 2>&3 | tee "$log_path/patch_-$pkg_owner.err" ;} &>"$log_path/patch_-$pkg_owner.log"
             test_pipe
-          fi  
+            check_pause_after_status;# assuming we only want to pause after a stage that actually did something
+        else
+            echo "Nothing to do for Patch...";
         fi
         ;;
-        
-    _install)
-        cd "$HOME/xxxbuild/yyysrc" && srcdir="$(pwd)" || exit 1
-        echo -n Installing...
-
-        { install_commands 3>&1 1>&2 2>&3 | tee "$HOME/install.err" ;} &>"$HOME/install.log"
-        test_pipe
-        ;;
-    
-    _root_post_install)
-        if type root_post_install_commands &>/dev/null ; then
-          if [ _$(whoami) != _root ]; then
-            su --preserve-environment root -c "HOME='$HOME' '$build_script' root_post_install" || exit 1
-          else  
-            echo -n "Finishing install(root)..."
-  
-            { root_post_install_commands 3>&1 1>&2 2>&3 | tee "$HOME/postinstall.err" ;} &>"$HOME/postinstall.log"
+    _configure)
+        fname=$(declare -f -F configure_commands);
+        current_step="Configuring";
+        persist_build_state;
+        if [[ -n "$fname" ]]; then    
+            echo "$current_step...";
+            create_directories_if_missing;
+            cd_to_build_dir;
+            { configure_commands 3>&1 1>&2 2>&3 | tee "$log_path/configure-$pkg_owner.err" ;} &>"$log_path/configure-$pkg_owner.log"
             test_pipe
-          fi  
-        fi  
+            check_pause_after_status;# assuming we only want to pause after a stage that actually did something
+            # NOTE: Simply using && instead of test_pipe would not work, because &&
+            # only tests the exit status of the last command in the pipe, which is tee.
+        else
+            echo "Nothing to do for Configure...";
+        fi
         ;;
-        
+    _make)
+        fname=$(declare -f -F make_commands);
+        current_step="Make";
+        persist_build_state;
+        if [[ -n "$fname" ]]; then
+            echo "$current_step...";
+            create_directories_if_missing;
+            cd_to_build_dir;
+            { make_commands 3>&1 1>&2 2>&3 | tee "$log_path/make-$pkg_owner.err" ;} &>"$log_path/make-$pkg_owner.log"
+            test_pipe
+            check_pause_after_status;# assuming we only want to pause after a stage that actually did something
+        else
+            echo "Nothing to do for Make...";
+        fi
+        ;;
+    _check)
+        fname=$(declare -f -F check_commands);
+        current_step="Checking";
+        persist_build_state;
+        if [[ -n "$fname" ]]; then
+            echo "$current_step...";
+            create_directories_if_missing;
+            cd_to_build_dir;
+            { check_commands 3>&1 1>&2 2>&3 | tee "$log_path/check-$pkg_owner.err" ;} &>"$log_path/check-$pkg_owner.log"
+            test_pipe;
+            check_pause_after_status;# assuming we only want to pause after a stage that actually did something
+        else
+            echo "Nothing to do for Check...";
+        fi
+        ;;
+    _install)
+        fname=$(declare -f -F install_commands);
+        current_step="Installing";
+        persist_build_state;
+        enable_wrappers;# we get the most benefit from the wrappers for Install and Post Install
+        if [[ -n "$fname" ]]; then
+            echo "$current_step...";
+            create_directories_if_missing;
+            cd_to_build_dir;
+            { install_commands 3>&1 1>&2 2>&3 | tee "$log_path/install-$pkg_owner.err" ;} &>"$log_path/install-$pkg_owner.log"
+            test_pipe
+            check_pause_after_status;# assuming we only want to pause after a stage that actually did something
+        else
+            echo "Nothing to do for Install...";
+        fi
+        ;;    
+    _post-install)
+        fname=$(declare -f -F post_install_commands);
+        current_step="Post Install";
+        persist_build_state;
+        enable_wrappers;# we get the most benefit from the wrappers for Install and Post Install
+        if [[ -n "$fname" ]]; then
+            echo "$current_step...";
+            create_directories_if_missing;
+            cd_to_build_dir;
+            { post_install_commands 3>&1 1>&2 2>&3 | tee "$log_path/post-install-$pkg_owner.err" ;} &>"$log_path/post-install-$pkg_owner.log"
+            test_pipe
+            check_pause_after_status;# assuming we only want to pause after a stage that actually did something    
+        else
+            echo "Nothing to do for Post Install...";
+        fi
+        ;;
+    _finalize)
+        fname=$(declare -f -F finalize_commands);
+        current_step="Finalize"; 
+        persist_build_state;
+        if [[ -n "$fname" ]]; then
+            echo "$current_step...";
+            cd $HOME;
+            finalize_commands; # no logging for finalize necessary 
+            echo "$current_step done";
+        else
+            echo "Nothing to do for Finalize...";
+        fi
+        ;;        
     _clean)
-        cd "$HOME"
-        echo -n Cleaning...
+        current_step="Cleaning";
+        echo "$current_step...";
         clean_commands
-        echo done!
+        echo "$current_step done!";
+        ;;
+    _edit_project_file)        
+        edit_project_file;        
         ;;
     *)
-        echo 1>&2 "Unknown command '$1'"
+        echo 1>&2 "Unknown command '$1'";
+        echo 1>&2 "Try ./build help for more info."
+        remove_pause_after_status_file;
         exit 1
         ;;
-  esac       
+  esac  
   shift 1
 done
+remove_pause_after_status_file;
+exit 0;

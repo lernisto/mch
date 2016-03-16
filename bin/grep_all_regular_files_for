@@ -72,3 +72,4 @@ cmd_post=(-- {} \;)
 find "${fs_to_scan[@]}" -xdev -noleaf \
      -not \( \( "${y[@]}" -prune \) -or "${y[@]}" \) \
      -and \( -true "${cmd_pre[@]}" "$@" "${cmd_post[@]}" \)
+exit 0;

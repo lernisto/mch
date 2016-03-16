@@ -9,17 +9,17 @@ UNLINK_BYPASS="";
 me=$(whoami);
 reportmsg="install";
 for item in "$@"; do
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-	    regex="^(.*=)(.*['[:space:]].*)$";
-	    if [[ "$item" =~ $regex ]]; then
-			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
-		else
-			reportmsg="$reportmsg \"$item\"";
-		fi
-	else
-		reportmsg="$reportmsg $item";
-	fi
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
 done
 report=0;
 notify=0;
@@ -33,8 +33,15 @@ if [[ -z "$DAISY_CHAIN" ]]; then
   exit 1;
 fi
 
+error_code=0;
 if [[ $UID -eq 0 ]]; then
-  $DAISY_CHAIN "$@";
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
 
 for p in $(type -ap unlink) ; do
@@ -61,57 +68,60 @@ lastitem="";
 pwd=$(pwd);
 pass_error=0;
 error_code=0;
+error_code_for_missing=0;
 audit_text="";
 
 report_filtered(){
-	echo 1>&2 "*** Filtered out owner, group, setuid and/or setgid";
-	echo 1>&2 "*** See the $HOME/install_filtered_options.txt file for details";
-	text="\n";
-	text="$text ------ Filtered out owner, group, setuid and/or setgid ------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
-	text="$text after: install$options $(echo $escaped_files | sed  -e 's/%/%%/g')";
-	if [[ -n "$dest" ]]; then 
-		regex="^.*['[:space:]].*$";
-		if [[ "$dest" =~ $regex ]]; then
-			text="$text $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
-		else
-			text="$text $(echo $dest | sed  -e 's/%/%%/g')\n";
-		fi
-	else
-		text="$text\n";
-	fi
-	printf "$text" >>"$HOME/install_filtered_options.txt";
+    echo 1>&2 "*** Filtered out owner, group, setuid and/or setgid";
+    echo 1>&2 "*** See the $HOME/install_filtered_options.txt file for details";
+    text="\n";
+    text="$text ------ Filtered out owner, group, setuid and/or setgid ------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text after: install$options $(echo $escaped_files | sed  -e 's/%/%%/g')";
+    if [[ -n "$dest" ]]; then 
+        regex="^.*['[:space:]].*$";
+        if [[ "$dest" =~ $regex ]]; then
+            text="$text $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
+        else
+            text="$text $(echo $dest | sed  -e 's/%/%%/g')\n";
+        fi
+    else
+        text="$text\n";
+    fi
+    printf "$text" >>"$HOME/install_filtered_options.txt";
 }
 report_errors(){
-	text="\n";
-	text="$text ------install command syntax errors-------------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/install_syntax_errors.txt";
+    text="\n";
+    text="$text ------install command syntax errors-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/install_syntax_errors.txt";
 }
 report_owner_issues(){
-	text="\n";
-	text="$text ------file ownership issues-------------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/install_owner_issues.txt";
+    text="\n";
+    text="$text ------file ownership issues-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/install_owner_issues.txt";
 }
 install_audit_log(){
-	text="\n";
-	text="$text ------ original command -------------\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text ------ one of the resulting commands actually run -------\n";
-	text="$text $1";
-	if [[ -n "$audit_text" ]]; then
-		text="$text error_code is: $error_code\n";
-		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
-		printf "$text" >>"$HOME/install_errors.txt";
-	fi
-	# while debugging the wrapper you may wish to uncomment the following line
-	#printf "$text" >>"$HOME/install_audit.txt";
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text ------ one of the resulting commands actually run -------\n";
+    text="$text $1";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/install_errors.txt";
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all install commands actually run
+        printf "$text" >>"$HOME/install_audit.txt";
+    fi
 }
 
 # Syntax
@@ -121,282 +131,283 @@ install_audit_log(){
 # install [OPTION]... -d DIRECTORY...
 
 add_escaped_file(){
-	lastitem=$(echo "$lastitem" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
-	regex="^.*['[:space:]].*$";
-	if [[ "$lastitem" =~ $regex ]]; then
-		escaped_files="$escaped_files \"$lastitem\"";
-	else
-		escaped_files="$escaped_files $lastitem";
-	fi
+    lastitem=$(echo "$lastitem" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
+    regex="^.*['[:space:]].*$";
+    if [[ "$lastitem" =~ $regex ]]; then
+        escaped_files="$escaped_files \"$lastitem\"";
+    else
+        escaped_files="$escaped_files $lastitem";
+    fi
 }
 
 # This for loop manages to process filenames or paths with white space or
 # special characters.
 for item in "$@"; do
-	if [[ $stopgettingoptions -eq 0 ]]; then
-		if [[ "$item" = '--' ]]; then
-			options="$options $item";
-			stopgettingoptions=1;
-			continue;
-		fi
-		# With options, spaces are assumed to delimit the options so we need
-		# continuation logic to process options that have been split with spaces.
-		if [[ $addnext -eq 1 ]];then
-			if [[ "$item" = '=' ]]; then
-				options="$options $item";
-			else
-				addnext=0;
-				options="$options $item";
-			fi
-			continue;
-		fi
-		if [[ $remnext -eq 1 ]]; then
-			if [[ "$item" != '=' ]]; then
-				if [[ $gettarget -eq 1 ]]; then
-					gettarget=0;
-					regex="^=(.*)$";
-					if [[ "$item" =~ $regex ]]; then
-						dest="${BASH_REMATCH[1]}";
-					else
-						dest="$item";
-					fi
-				fi
-				remnext=0;
-			fi
-			continue;
-		fi
-		# Handle double hyphen options first
-		if [[ "$item" = '--help' ]]; then
-			install_audit_log "$DAISY_CHAIN \"--help\"\n";
-			$DAISY_CHAIN "--help";
-			exit 0;
-		fi
-		if [[ "$item" = '--version' ]]; then
-			install_audit_log "$DAISY_CHAIN \"--version\"\n";
-			$DAISY_CHAIN "--version";
-			exit 0;
-		fi
-		if [[ "$item" = '--directory' ]]; then
-			dflag=1;
-			options="$options $item";
-			continue;
-		fi
-		if [[ "$item" = '--no-target-directory' ]]; then
-			destisfile=1;
-			options="$options $item";
-			continue;
-		fi
-		regex="^--owner[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				remnext=1;
-		    fi
-		    report=1;
-			continue;
-		fi
-		regex="^--group[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				remnext=1;
-		    fi
-		    report=1;
-			continue;
-		fi
-		regex="^--mode[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^--backup=(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi		
-		regex="^--suffix[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^--strip-program[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^--context[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^--target-directory[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			targetoption=1;
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				remnext=1;
-				gettarget=1;
-		    else
-		        dest="${BASH_REMATCH[1]}";
-		    fi
-			continue;
-		fi	
-		regex="^--.+$";# catch other double hyphen options
-		if [[ "$item" =~ $regex ]]; then
-			options="$options $item";
-			continue;
-		fi		
-		# these options can be mashed all together mostly
-		regex="^-([^-]+)$";# single hyphen option(s)
-		if [[ "$item" =~ $regex ]]; then
-			mashed="${BASH_REMATCH[1]}";
-			out_options="-";
-			out_flag=0;
-			olength=${#mashed};
-			# We need to process these options from left to right
-			for (( i=0; i<$olength; i++ )); do
-				ochar=${mashed:$i:1};
-				case "$ochar" in
-					c):
-						;;
-					d)  dflag=1; 
-						out_flag=1;# An option we want to keep
-						out_options="$out_options$ochar";
-						;;
-					[vTbCDps])  out_flag=1;# An option we want to keep
-						out_options="$out_options$ochar";
-						;;					
-					*) 	remainder=$((olength-i));
-						mashed=${mashed:$i:$remainder};# get remaining chars
-						break;
-				esac
-			done
-			# add these captured options if any
-			if [[ $out_flag -eq 1 ]]; then
-				options="$options $out_options";				
-			fi
-			# The rest of these if I save them at all I want separated out.
-			# These options are special since if they were mashed with other
-			# options they would have to be at the end of the mess to be valid.
-			regex="^[og](.*)$"; # filter owner and group options
-			if [[ "$mashed" =~ $regex ]]; then
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					remnext=1;
-				fi
-				report=1;
-				continue;
-			fi
-			regex="^t(.*)$"; # find any target-directory option
-			if [[ "$mashed" =~ $regex ]]; then
-				targetoption=1;
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					remnext=1;
-					gettarget=1;
-				else
-					dest="${BASH_REMATCH[1]}"
-				fi
-				continue;
-			fi
-			regex="^m(.*)$"; # find any mode option
-			if [[ "$mashed" =~ $regex ]]; then
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					addnext=1;
-				fi
-				options="$options -m${BASH_REMATCH[1]}";
-				continue;				
-			fi
-			regex="^S(.*)$"; # find any suffix option
-			if [[ "$mashed" =~ $regex  ]]; then
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					addnext=1;
-				fi
-				options="$options -S${BASH_REMATCH[1]}";
-				continue;
-			fi
-			regex="^Z(.*)$"; # find any SELinux security context
-			if [[ "$mashed" =~ $regex  ]]; then
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					addnext=1;
-				fi
-				options="$options -Z${BASH_REMATCH[1]}";
-				continue;
-			fi
-			continue;
-		fi
-		if [[ -n "$lastitem" ]]; then
-			# add $lastitem to files array
-			sourcenum=$[$sourcenum+1];
-			files+=("$lastitem");
-			add_escaped_file;
-		fi
-		lastitem="$item";
-	else
-		if [[ -n "$lastitem" ]]; then
-			sourcenum=$[$sourcenum+1];
-			files+=("$lastitem");
-			add_escaped_file;
-		fi
-		lastitem="$item";
-	fi
+    if [[ $stopgettingoptions -eq 0 ]]; then
+        if [[ "$item" = '--' ]]; then
+            options="$options $item";
+            stopgettingoptions=1;
+            continue;
+        fi
+        # With options, spaces are assumed to delimit the options so we need
+        # continuation logic to process options that have been split with spaces.
+        if [[ $addnext -eq 1 ]];then
+            if [[ "$item" = '=' ]]; then
+                options="$options $item";
+            else
+                addnext=0;
+                options="$options $item";
+            fi
+            continue;
+        fi
+        if [[ $remnext -eq 1 ]]; then
+            if [[ "$item" != '=' ]]; then
+                if [[ $gettarget -eq 1 ]]; then
+                    gettarget=0;
+                    regex="^=(.*)$";
+                    if [[ "$item" =~ $regex ]]; then
+                        dest="${BASH_REMATCH[1]}";
+                    else
+                        dest="$item";
+                    fi
+                fi
+                remnext=0;
+            fi
+            continue;
+        fi
+        # Handle double hyphen options first
+        if [[ "$item" = '--help' ]]; then
+            install_audit_log "$DAISY_CHAIN \"--help\"\n";
+            $DAISY_CHAIN "--help";
+            exit 0;
+        fi
+        if [[ "$item" = '--version' ]]; then
+            install_audit_log "$DAISY_CHAIN \"--version\"\n";
+            $DAISY_CHAIN "--version";
+            exit 0;
+        fi
+        if [[ "$item" = '--directory' ]]; then
+            dflag=1;
+            options="$options $item";
+            continue;
+        fi
+        if [[ "$item" = '--no-target-directory' ]]; then
+            destisfile=1;
+            options="$options $item";
+            continue;
+        fi
+        regex="^--owner[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                remnext=1;
+            fi
+            report=1;
+            continue;
+        fi
+        regex="^--group[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                remnext=1;
+            fi
+            report=1;
+            continue;
+        fi
+        regex="^--mode[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--backup=(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi      
+        regex="^--suffix[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--strip-program[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--context[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--target-directory[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            targetoption=1;
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                remnext=1;
+                gettarget=1;
+            else
+                dest="${BASH_REMATCH[1]}";
+            fi
+            continue;
+        fi  
+        regex="^--.+$";# catch other double hyphen options
+        if [[ "$item" =~ $regex ]]; then
+            options="$options $item";
+            continue;
+        fi      
+        # these options can be mashed all together mostly
+        regex="^-([^-]+)$";# single hyphen option(s)
+        if [[ "$item" =~ $regex ]]; then
+            mashed="${BASH_REMATCH[1]}";
+            out_options="-";
+            out_flag=0;
+            olength=${#mashed};
+            # We need to process these options from left to right
+            for (( i=0; i<$olength; i++ )); do
+                ochar=${mashed:$i:1};
+                case "$ochar" in
+                    c):
+                        ;;
+                    d)  dflag=1; 
+                        out_flag=1;# An option we want to keep
+                        out_options="$out_options$ochar";
+                        ;;      
+                    [ogtmSZ]) remainder=$((olength-i));
+                        mashed=${mashed:$i:$remainder};# get remaining chars
+                        break;;
+                    *): # Save everything else, should support future options.
+                        out_flag=1;# An option we want to keep
+                        out_options="$out_options$ochar";
+                        ;;
+                esac
+            done
+            # add these captured options if any
+            if [[ $out_flag -eq 1 ]]; then
+                options="$options $out_options";                
+            fi
+            # The rest of these if I save them at all I want separated out.
+            # These options are special since if they were mashed with other
+            # options they would have to be at the end of the mess to be valid.
+            regex="^[og](.*)$"; # filter owner and group options
+            if [[ "$mashed" =~ $regex ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    remnext=1;
+                fi
+                report=1;
+                continue;
+            fi
+            regex="^t(.*)$"; # find any target-directory option
+            if [[ "$mashed" =~ $regex ]]; then
+                targetoption=1;
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    remnext=1;
+                    gettarget=1;
+                else
+                    dest="${BASH_REMATCH[1]}"
+                fi
+                continue;
+            fi
+            regex="^m(.*)$"; # find any mode option
+            if [[ "$mashed" =~ $regex ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    addnext=1;
+                fi
+                options="$options -m${BASH_REMATCH[1]}";
+                continue;               
+            fi
+            regex="^S(.*)$"; # find any suffix option
+            if [[ "$mashed" =~ $regex  ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    addnext=1;
+                fi
+                options="$options -S${BASH_REMATCH[1]}";
+                continue;
+            fi
+            regex="^Z(.*)$"; # find any SELinux security context
+            if [[ "$mashed" =~ $regex  ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    addnext=1;
+                fi
+                options="$options -Z${BASH_REMATCH[1]}";
+                continue;
+            fi
+            continue;
+        fi
+        if [[ -n "$lastitem" ]]; then
+            # add $lastitem to files array
+            sourcenum=$[$sourcenum+1];
+            files+=("$lastitem");
+            add_escaped_file;
+        fi
+        lastitem="$item";
+    else
+        if [[ -n "$lastitem" ]]; then
+            sourcenum=$[$sourcenum+1];
+            files+=("$lastitem");
+            add_escaped_file;
+        fi
+        lastitem="$item";
+    fi
 done
 # The last item will either be the destination or one of the other files or
 # directories for the list.
 if [[ -n "$lastitem" ]]; then
-	if [[ $targetoption -eq 1 ]] || [[ $dflag -eq 1 ]]; then
-		files+=("$lastitem");
-		add_escaped_file;
-		if [[ ! -d "$dest" ]] && [[ $targetoption -eq 1 ]]; then
-			echo 1>&2 "*** A target directory was indicated however either the destination";
-			echo 1>&2 "*** directory does not exist or it is not a directory.";
-			echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
-			report_errors "The destination directory $(echo \"$dest\" | sed  -e 's/%/%%/g') does not exist or it is not a directory.";
-			exit 1;
-		fi
-	else
-		dest="$lastitem";
-		if [[ $destisfile -eq 1 ]] && [[ -d "$dest" ]]; then
-			echo 1>&2 "*** The target \"$dest\" is a directory but is";
-			echo 1>&2 "*** supposed to be a file based on options indicated on the command line.";
-			echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
-			error_text="The target $(echo \"$dest\" | sed  -e 's/%/%%/g')\" is a directory but is\n";
-			error_text="$error_text supposed to be a file based on options indicated on the command line.";
-			report_errors "$error_text";
-			exit 1;
-		fi
-		if [[ -f "$dest" ]] || [[ -h "$dest" ]]; then
-		    # sometimes a link is to a directory so we don't want to mistakenly say
-		    # it is a file.
-			if [[ ! -d "$dest" ]]; then
-				destisfile=1;
-			fi
-		fi
-		if [[ $destisfile -eq 0 ]] && [[ ! -e "$dest" ]]; then
-				# destination does not exist so destination should be a file
-				# or link.
-				destisfile=1;
-		fi
-		if [[ $sourcenum -gt 1 ]] && [[ $destisfile -eq 1 ]]; then
-			echo 1>&2 "*** There is more than one source file indicated but the";
-			echo 1>&2 "*** destination directory does not exist or is not a directory.";
-			echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
-			error_text="There is more than one source file indicated but the destination directory\n";
-			error_text="$error_text $(echo \"$dest\" | sed  -e 's/%/%%/g') does not exist or is not a directory.\n";
-			report_errors "$error_text";
-			exit 1;
-		fi
-	fi
+    if [[ $targetoption -eq 1 ]] || [[ $dflag -eq 1 ]]; then
+        files+=("$lastitem");
+        add_escaped_file;
+        if [[ ! -d "$dest" ]] && [[ $targetoption -eq 1 ]]; then
+            echo 1>&2 "*** A target directory was indicated however either the destination";
+            echo 1>&2 "*** directory does not exist or it is not a directory.";
+            echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
+            report_errors "The destination directory $(echo \"$dest\" | sed  -e 's/%/%%/g') does not exist or it is not a directory.";
+            exit 1;
+        fi
+    else
+        dest="$lastitem";
+        if [[ $destisfile -eq 1 ]] && [[ -d "$dest" ]]; then
+            echo 1>&2 "*** The target \"$dest\" is a directory but is";
+            echo 1>&2 "*** supposed to be a file based on options indicated on the command line.";
+            echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
+            error_text="The target $(echo \"$dest\" | sed  -e 's/%/%%/g')\" is a directory but is\n";
+            error_text="$error_text supposed to be a file based on options indicated on the command line.";
+            report_errors "$error_text";
+            exit 1;
+        fi
+        if [[ -f "$dest" ]] || [[ -h "$dest" ]]; then
+            # sometimes a link is to a directory so we don't want to mistakenly say
+            # it is a file.
+            if [[ ! -d "$dest" ]]; then
+                destisfile=1;
+            fi
+        fi
+        if [[ $destisfile -eq 0 ]] && [[ ! -e "$dest" ]]; then
+                # destination does not exist so destination should be a file
+                # or link.
+                destisfile=1;
+        fi
+        if [[ $sourcenum -gt 1 ]] && [[ $destisfile -eq 1 ]]; then
+            echo 1>&2 "*** There is more than one source file indicated but the";
+            echo 1>&2 "*** destination directory does not exist or is not a directory.";
+            echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
+            error_text="There is more than one source file indicated but the destination directory\n";
+            error_text="$error_text $(echo \"$dest\" | sed  -e 's/%/%%/g') does not exist or is not a directory.\n";
+            report_errors "$error_text";
+            exit 1;
+        fi
+    fi
 fi
 
 # At this point we have split options from files and even have already
@@ -405,16 +416,16 @@ fi
 # expressions against the whole options string.
 
 doclean(){
-	regex=$1;
-	while [[ $options =~ $regex ]];
-	do
-		if [[ $notify -eq 1 ]]; then report=1; fi
-	    if [[ "${BASH_REMATCH[2]}" = "," ]];then
-		   options="${BASH_REMATCH[1]}${BASH_REMATCH[3]}";
-		else
-		   options="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}";
-		fi
-	done
+    regex=$1;
+    while [[ $options =~ $regex ]];
+    do
+        if [[ $notify -eq 1 ]]; then report=1; fi
+        if [[ "${BASH_REMATCH[2]}" = "," ]];then
+           options="${BASH_REMATCH[1]}${BASH_REMATCH[3]}";
+        else
+           options="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}";
+        fi
+    done
 }
 notify=0;
 # Keep only the last 4 digits of the OCTAL-MODE.
@@ -434,15 +445,15 @@ options="$options ";# we need a trailing space for the clean up to work
 # Because the characters "ugo" can occur on either side of the "="
 regex="(.*\s)(--mode|-m)\s*=*\s*\S*[\+=-][rwxXtugo]+\S*\s(.*)";
 if [[ $options =~ $regex ]]; then
-	:
-	# We probably want to keep some of this.
+    :
+    # We probably want to keep some of this.
 else
-	# eliminate any symbolic --mode setting that would be empty if we removed "s"
-	regex="(.*\s)--mode\s*=*\s*[^rwxXt[:space:]0-7]+\s(.*)";
-	doclean $regex;
-	# eliminate any symbolic -m setting that would be empty if we removed "s"
-	regex="(.*\s)-m\s*[^rwxXt[:space:]0-7]+\s(.*)";
-	doclean $regex;
+    # eliminate any symbolic --mode setting that would be empty if we removed "s"
+    regex="(.*\s)--mode\s*=*\s*[^rwxXt[:space:]0-7]+\s(.*)";
+    doclean $regex;
+    # eliminate any symbolic -m setting that would be empty if we removed "s"
+    regex="(.*\s)-m\s*[^rwxXt[:space:]0-7]+\s(.*)";
+    doclean $regex;
 fi
 notify=1;
 # eliminate any "s" option in the symbolic --mode parameters
@@ -475,95 +486,124 @@ doclean $regex;
 
 if [[ $report -eq 1 ]]; then report_filtered; fi
 
+# An interesting issue arose when installing tcl8.6.0. The package is setting
+# a very restrictive umask for copy operations which resulted in the wrapper
+# creating read only temporary files, which caused the wrapper to fail.
+save_umask=$(umask);# backup the current umask
+umask 0077; # set a usable umask
 error_file=$(mktemp -t install.XXXXXXXXXX);# temporary file for stderr output
+umask "$save_umask";# restore backed up umask
 
 # Now we need to process files or directories differently based on whether
 # we are creating directories or copying files.
 for file in "${files[@]}"; do
-	error_code=0;
-	audit_text="";
-	if [[ $dflag -eq 0 ]]; then
-		if [[ -e "$file" ]]; then
-			if [[ $destisfile -eq 1 ]]; then
-				if [[ -e "$dest" ]] || [[ -h "$dest" ]]; then
-					owner=$(stat -c%U -- "$dest");
-					if [[ "$owner" != "$me" ]]; then
-						echo 1>&2 "*** The file or link: \"$dest\" is owned by $owner and not $me";
-						echo 1>&2 "*** See the \"$HOME/install_owner_issues.txt\" file for details";
-						error_text="The file or link: $(echo \"$dest\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
-						error_text="$error_text$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
-						report_owner_issues "$error_text";
-						regex="^[^/].*$"; # should only match if it is not a real full path
-						if [[ "$dest" =~ $regex ]]; then
-							echo "$pwd/$dest">>"$HOME/install_owner_file_list.txt";
-						else
-							echo "$dest">>"$HOME/install_owner_file_list.txt";
-						fi
-						break;# there should only be one
-					fi
-				fi
-				$DAISY_CHAIN $options "$file" "$dest" 2>"$error_file" || error_code="$?";
-				ERROR=$(<"$error_file");
-				if [[ "$error_code" -ne 0 ]]; then
-					audit_text="ERROR: $ERROR";
-					echo "$ERROR" 1>&2; # output to stdout and stderr
-				fi
-				install_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
-				$UNLINK_BYPASS "$error_file"; # remove temporary file
-				exit $error_code;
-			else
-				# get rid of trailing slashes on the destination
-				regex="(.*)/+$";
-				if [[ "$dest" =~ $regex ]]; then dest="${BASH_REMATCH[1]}"; fi
-				# get the file part of any path in the source
-				filepart=$(basename "$file");
-				fulldest="$dest/$filepart"; # full destination specification
-				if [[ -e "$fulldest" ]] || [[ -h "$fulldest" ]]; then
-					owner=$(stat -c%U -- "$fulldest");
-					if [[ "$owner" != "$me" ]]; then
-						echo 1>&2 "*** The file or link: \"$fulldest\" is owned by \"$owner\" and not \"$me\"";
-						echo 1>&2 "*** See the \"$HOME/install_owner_issues.txt\" file for details";
-						error_text="The file or link: $(echo \"$fulldest\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
-						error_text="$error_text$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$fulldest\" | sed  -e 's/%/%%/g')\n";
-						report_owner_issues "$error_text";
-						regex="^[^/].*$"; # should only match if it is not a real full path
-						if [[ "$fulldest" =~ $regex ]]; then
-							echo "$pwd/$fulldest">>"$HOME/install_owner_file_list.txt";
-						else
-							echo "$fulldest">>"$HOME/install_owner_file_list.txt";
-						fi
-						continue;# skip this one
-					fi
-				fi
-				$DAISY_CHAIN $options "$file" "$fulldest" 2>"$error_file" || error_code="$?";
-				ERROR=$(<"$error_file");
-				if [[ "$error_code" -ne 0 ]]; then
-					audit_text="ERROR: $ERROR";	
-					echo "$ERROR" 1>&2; # output to stdout and stderr
-					pass_error="$error_code"; # preserve error code for exit
-				fi
-				install_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$fulldest\" | sed  -e 's/%/%%/g')\n";
-			fi
-		else
-			echo 1>&2 "*** ERROR: The source: \"$file\" for install command does not exist or is a broken link";
-		fi
-	else
-		# creating directories
-		if [[ -e "$file" ]]; then
-			:
-			echo 1>&2 "*** directory or file already exists: \"$file\"";
-			install_audit_log "directory or file already exists: $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
-		else
-			$DAISY_CHAIN $options "$file" 2>"$error_file" || error_code="$?";
-			ERROR=$(<"$error_file");	
-			if [[ "$error_code" -ne 0 ]]; then
-				audit_text="ERROR: $ERROR";
-				echo "$ERROR" 1>&2; # output to stdout and stderr
-				pass_error="$error_code"; # preserve error code for exit
-			fi
-			install_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
-		fi
-	fi
+    error_code=0;
+    audit_text="";
+    if [[ $dflag -eq 0 ]]; then
+        if [[ -e "$file" ]]; then
+            if [[ $destisfile -eq 1 ]]; then
+                if [[ -e "$dest" ]] || [[ -h "$dest" ]]; then
+                    owner=$(stat -c%U -- "$dest");
+                    if [[ "$owner" != "$me" ]]; then
+                        echo 1>&2 "*** The file or link: \"$dest\" is owned by $owner and not $me";
+                        echo 1>&2 "*** See the \"$HOME/install_owner_issues.txt\" file for details";
+                        error_text="The file or link: $(echo \"$dest\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+                        error_text="$error_text$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
+                        report_owner_issues "$error_text";
+                        regex="^[^/].*$"; # should only match if it is not a real full path
+                        if [[ "$dest" =~ $regex ]]; then
+                            echo "$pwd/$dest">>"$HOME/install_owner_file_list.txt";
+                        else
+                            echo "$dest">>"$HOME/install_owner_file_list.txt";
+                        fi
+                        break;# there should only be one
+                    fi
+                fi
+                $DAISY_CHAIN $options "$file" "$dest" 2>"$error_file" || error_code="$?";
+                ERROR=$(<"$error_file");
+                if [[ "$error_code" -ne 0 ]]; then
+                    audit_text="ERROR: $ERROR";
+                    echo "$ERROR" 1>&2; # output to stdout and stderr
+                fi
+                install_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
+                $UNLINK_BYPASS "$error_file"; # remove temporary file
+                exit $error_code;
+            else
+                # get rid of trailing slashes on the destination
+                regex="(.*)/+$";
+                if [[ "$dest" =~ $regex ]]; then dest="${BASH_REMATCH[1]}"; fi
+                # get the file part of any path in the source
+                filepart=$(basename "$file");
+                fulldest="$dest/$filepart"; # full destination specification
+                if [[ -e "$fulldest" ]] || [[ -h "$fulldest" ]]; then
+                    owner=$(stat -c%U -- "$fulldest");
+                    if [[ "$owner" != "$me" ]]; then
+                        echo 1>&2 "*** The file or link: \"$fulldest\" is owned by \"$owner\" and not \"$me\"";
+                        echo 1>&2 "*** See the \"$HOME/install_owner_issues.txt\" file for details";
+                        error_text="The file or link: $(echo \"$fulldest\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+                        error_text="$error_text$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$fulldest\" | sed  -e 's/%/%%/g')\n";
+                        report_owner_issues "$error_text";
+                        regex="^[^/].*$"; # should only match if it is not a real full path
+                        if [[ "$fulldest" =~ $regex ]]; then
+                            echo "$pwd/$fulldest">>"$HOME/install_owner_file_list.txt";
+                        else
+                            echo "$fulldest">>"$HOME/install_owner_file_list.txt";
+                        fi
+                        continue;# skip this one
+                    fi
+                fi
+                $DAISY_CHAIN $options "$file" "$fulldest" 2>"$error_file" || error_code="$?";
+                ERROR=$(<"$error_file");
+                if [[ "$error_code" -ne 0 ]]; then
+                    audit_text="ERROR: $ERROR"; 
+                    echo "$ERROR" 1>&2; # output to stdout and stderr
+                    pass_error="$error_code"; # preserve error code for exit
+                fi
+                install_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$fulldest\" | sed  -e 's/%/%%/g')\n";
+            fi
+        else
+            if [[ "$DISABLE_WRAPPER_WARNINGS" -eq 0 ]]; then
+                echo 1>&2 "*** The source: \"$file\" for the install command does not exist or is a broken link";
+                echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
+                error_text="The source: $(echo \"$file\" | sed  -e 's/%/%%/g') for the install command\n";
+                error_text="$error_text  does not exist or is a broken link.\n";
+                report_errors "$error_text";
+            fi
+            if [[ "$DISABLE_WRAPPER_ERROR_CODES" -eq 0 ]]; then
+                error_code_for_missing=1;
+            fi
+        fi
+    else
+        # creating directories
+        if [[ -e "$file" ]]; then
+            :
+            if [[ "$DISABLE_WRAPPER_WARNINGS" -eq 0 ]]; then
+                echo 1>&2 "*** The directory or file already exists: \"$file\"";
+                echo 1>&2 "*** See the \"$HOME/install_syntax_errors.txt\" file for details";
+                error_text="The directory or file already exists: $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
+                report_errors "$error_text";
+            fi
+            # note: we do not return an error code for trying to create an
+            # already existing directory. Ignoring existing directories helps
+            # us avoid getting a permissions error if the directory is owned
+            # by someone else, and prevents us from changing the mode of a
+            # directory if we own it and that was indicated on the install
+            # command line.
+        else
+            $DAISY_CHAIN $options "$file" 2>"$error_file" || error_code="$?";
+            ERROR=$(<"$error_file");    
+            if [[ "$error_code" -ne 0 ]]; then
+                audit_text="ERROR: $ERROR";
+                echo "$ERROR" 1>&2; # output to stdout and stderr
+                pass_error="$error_code"; # preserve error code for exit
+            fi
+            install_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
+        fi
+    fi
 done
 $UNLINK_BYPASS "$error_file"; # remove temporary file
+# Carry forward error codes from any missing items
+if [[ $error_code_for_missing -eq 1 ]]; then
+    pass_error="$error_code_for_missing";
+fi
 exit $pass_error;

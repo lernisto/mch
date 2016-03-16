@@ -1,16 +1,105 @@
 # The wrappers directory must be the first entry in the PATH.
-# The /tools/bin directory must be the last entry in the PATH and can be 
-#   removed at the end of Chapter 6.
+# The /tools/bin directory must be the last entry in the PATH if it exists.
 
-export MAKEFLAGS='-j 8'
-set +h
-umask 002
+# The build script will call this function to ensure that no matter what has
+# happened to the PATH in the terminal shell it is set to an expected value
+# for the build script. If you messed up the PATH at the terminal shell prompt
+# you can run "establish_path" at the prompt to restore it.
+establish_path (){
+    source /etc/pkgusr/path_vars;
+    if [[ -d "/tools/bin" ]]; then
+        # /tools/bin only needs to be in the path while it exists
+        export PATH="$wrappers_path":"$path_without_wrappers":/tools/bin
+    else
+        export PATH="$wrappers_path":"$path_without_wrappers"
+    fi
+}
+export -f establish_path; # make available to scripts
+establish_path; # set the correct path to include wrappers
+
+# Note: the best way to disable the wrappers is to use the disable_wrappers
+# function. This function, on the other hand, will also disable the "ldconfig" 
+# and "setup_install_dirs" wrappers if disabling them is ever required.
+set_path_without_wrappers (){
+    source /etc/pkgusr/path_vars;
+    if [[ -d "/tools/bin" ]]; then
+        # /tools/bin only needs to be in the path while it exists
+        export PATH="$path_without_wrappers":/tools/bin
+    else
+        export PATH="$path_without_wrappers"
+    fi
+}
+export -f set_path_without_wrappers; # make available to scripts
+
+# Wrapper disable and enable functions
+disable_wrappers () {
+    export DISABLE_WRAPPERS=1; # disable the wrapper scripts
+}
+export -f disable_wrappers; # make available to scripts
+enable_wrappers () {
+    export DISABLE_WRAPPERS=0; # enable the wrapper scripts
+}
+export -f enable_wrappers; # make available to scripts
+enable_wrappers; # enable wrappers by default
+
+# Note the build script will override whatever you have set for the 
+# enable_wrappers and disable_wrappers status at the terminal shell prompt 
+# but it will not propagate changes back to the shell by default. So to clarify
+# if you disable_wrappers at the shell prompt, when you run the build script
+# it will still enable wrappers for the install and post-install steps. Clear?
+
+# Functions to disable or enable the output of wrapper warnings
+disable_wrapper_warnings () {
+    export DISABLE_WRAPPER_WARNINGS=1; # disable the warnings
+}   
+export -f disable_wrapper_warnings; # make available to scripts
+enable_wrapper_warnings () {
+    export DISABLE_WRAPPER_WARNINGS=0; # enable the warnings
+}
+export -f enable_wrapper_warnings; # make available to scripts
+enable_wrapper_warnings; # enable wrapper warnings by default
+
+# Functions to set the normal behavior of miscellaneous error codes 
+disable_wrapper_error_codes () {
+    export DISABLE_WRAPPER_ERROR_CODES=1; # disable the warnings
+}   
+export -f disable_wrapper_error_codes; # make available to scripts
+enable_wrapper_error_codes () {
+    export DISABLE_WRAPPER_ERROR_CODES=0; # enable the warnings
+}
+export -f enable_wrapper_error_codes; # make available to scripts
+disable_wrapper_error_codes; # disable wrapper error codes by default
+
+# Functions to disable or enable the output of complete wrapper audit logs
+disable_wrapper_audit () {
+    export ENABLE_WRAPPER_AUDIT=0; # disable the audit logs
+}   
+export -f disable_wrapper_audit; # make available to scripts
+enable_wrapper_audit () {
+    export ENABLE_WRAPPER_AUDIT=1; # enable the audit logs
+}
+export -f enable_wrapper_audit; # make available to scripts
+disable_wrapper_audit; # disable the wrapper audit logging by default
+
+# Ulimit settings required for building some packages
 ulimit -s 32768
 ulimit -n 4096
-export TERM=xterm
-INPUTRC=/etc/inputrc
 
-export PATH=/usr/lib/pkgusr:/bin:/usr/bin:/sbin:/usr/sbin:/tools/bin
+# Optional settings
+# If you have 4 CPUs with multithreading 8 is a reasonable value for this...
+export MAKEFLAGS='-j 8'
+# Don't cache path look ups for executables
+set +h
+# Set the default file creation mask for package users
+umask 022
+
+# Settings that may be useful for some environments, if TERM on your host
+# is set to something odd it needs to be pointed at something normal so
+# package installs can understand it. 
+# export TERM=xterm
+# If your keyboard mapping needs to be tweaked, setting up a custom 
+# /etc/inputrc file is the ticket.
+# INPUTRC=/etc/inputrc
 
 # Make prompt reflect that we are a package user.
 export PROMPT_COMMAND='PS1="package \u:"`pwd`"> "'

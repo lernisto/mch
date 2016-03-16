@@ -8,17 +8,17 @@ UNLINK_BYPASS="";
 me=$(whoami);
 reportmsg="tar";
 for item in "$@"; do
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-	    regex="^(.*=)(.*['[:space:]].*)$";
-	    if [[ "$item" =~ $regex ]]; then
-			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
-		else
-			reportmsg="$reportmsg \"$item\"";
-		fi
-	else
-		reportmsg="$reportmsg $item";
-	fi
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
 done
 
 for p in $(type -ap tar) ; do
@@ -30,8 +30,15 @@ if [ -z "$DAISY_CHAIN" ]; then
   exit 1;
 fi
 
-if [ $UID -eq 0 ]; then
-  $DAISY_CHAIN "$@";
+error_code=0;
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
 
 for p in $(type -ap unlink) ; do
@@ -58,31 +65,41 @@ owner=$(stat -c%U -- "$pwd");
 # It might be nice to know where "tar" is run, what parameters it is given
 # and who owns the directory that "tar" is being run in.
 report_tar_useage(){
-	text="\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text owner of $(echo \"$pwd\" | sed -e 's/%/%%/g') is: \"$owner\"\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	if [[ -n "$audit_text" ]]; then
-		text="$text error_code is: $error_code\n";
-		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
-		printf "$text" >>"$HOME/tar_errors.txt";
-	fi
-	# while debugging this wrapper you may wish to uncomment the following line
-	#printf "$text" >>"$HOME/tar_audit.txt";
+    text="\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text owner of $(echo \"$pwd\" | sed -e 's/%/%%/g') is: \"$owner\"\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/tar_errors.txt";
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all tar commands actually run
+        printf "$text" >>"$HOME/tar_audit.txt";
+    fi
 }
+
+# An interesting issue arose when installing tcl8.6.0. The package is setting
+# a very restrictive umask for copy operations which resulted in the wrapper
+# creating read only temporary files, which caused the wrapper to fail.
+save_umask=$(umask);# backup the current umask
+umask 0077; # set a usable umask
 error_file=$(mktemp -t tar.XXXXXXXXXX);# temporary file for stderr output
+umask "$save_umask";# restore backed up umask
+
 $DAISY_CHAIN "$@" 2>"$error_file" || error_code="$?";
 ERROR=$(<"$error_file");
 $UNLINK_BYPASS "$error_file"; # remove temporary file
 echo "";# required for some reason to prevent false positive for $error_code
 if [[ "$error_code" -ne 0 ]]; then
-	if [[ "$owner" != "$me" ]]; then
-		echo "$pwd">>"$HOME/tar_owner_file_list.txt";
-		echo 1>&2 "*** The pwd: \"$pwd\"  is owned by  \"$owner\" and not \"$me\"";
-		echo 1>&2 "*** See the \"$HOME/tar_audit.txt\" file for details.";
-	fi
-	audit_text="ERROR: $ERROR";
-	echo "$ERROR" 1>&2;
+    if [[ "$owner" != "$me" ]]; then
+        echo "$pwd">>"$HOME/tar_owner_file_list.txt";
+        echo 1>&2 "*** The pwd: \"$pwd\"  is owned by  \"$owner\" and not \"$me\"";
+        echo 1>&2 "*** See the \"$HOME/tar_audit.txt\" file for details.";
+    fi
+    audit_text="ERROR: $ERROR";
+    echo "$ERROR" 1>&2;
 fi
 
 report_tar_useage;

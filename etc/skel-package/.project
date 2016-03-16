@@ -1,11 +1,15 @@
 DESCRIPTION:
-  bogus package
+  <package_name>
 CONTENTS:
-  see pkg.lst
+  see <pkg_owner.lst>
 LAST UPDATED:
-  30 Feb 2007
+  <Date_text>
+DEPENDS:
+  Linux kernel
 DOWNLOAD LOCATION:
-  ftp://ftp.gnu.org/gnu/foo/
+  <urltext>
+MD5SUMS:
+  <md5text>
 WEB SITE:
   <none>
 INSTALL NOTES:

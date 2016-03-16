@@ -7,17 +7,17 @@ DAISY_CHAIN="";
 me=$(whoami);
 reportmsg="rm";
 for item in "$@"; do
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-	    regex="^(.*=)(.*['[:space:]].*)$";
-	    if [[ "$item" =~ $regex ]]; then
-			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
-		else
-			reportmsg="$reportmsg \"$item\"";
-		fi
-	else
-		reportmsg="$reportmsg $item";
-	fi
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
 done
 
 for p in $(type -ap rm) ; do
@@ -29,8 +29,15 @@ if [ -z "$DAISY_CHAIN" ]; then
   exit 1;
 fi
 
-if [ $UID -eq 0 ]; then
-  $DAISY_CHAIN "$@";
+error_code=0;
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
 
 # "options" and "files" are arrays. In the case of files this helped preserve
@@ -45,170 +52,243 @@ pwd=$(pwd);
 item="";
 audit_text="";
 error_code=0;
+error_code_for_missing=0;
 f_seen=0;
 
 report_owner_issues(){
-	text="\n";
-	text="$text ------file ownership issues-------------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/rm_owner_issues.txt";
+    text="\n";
+    text="$text ------file ownership issues-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/rm_owner_issues.txt";
+}
+report_errors(){
+    text="\n";
+    text="$text ------rm command syntax errors-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/rm_syntax_errors.txt";
 }
 rm_audit_log(){
-	text="\n";
-	text="$text ------ original command -------------\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text ------ The resulting command actually run -------\n";
-	text="$text $1";
-	if [[ -n "$audit_text" ]]; then
-		text="$text error_code is: $error_code\n";
-		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
-		printf "$text" >>"$HOME/rm_errors.txt"
-	fi
-	# while debugging this wrapper you may wish to uncomment the following line
-	#printf "$text" >>"$HOME/rm_audit.txt";
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text ------ The resulting command actually run -------\n";
+    text="$text $1";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/rm_errors.txt"
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all rm commands actually run
+        printf "$text" >>"$HOME/rm_audit.txt";
+    fi
 }
 
 # Syntax
 # rm [OPTION]... FILE...
 
 process_file(){
-	if [[ -e "$item" ]] || [[ -h "$item" ]]; then
-			# Exists as a directory, file or link so check ownership
-			if [[ -d "$item" ]]; then
-				# To be thorough, if we are talking about removing a directory
-				# we should report ownership issues for any of the contained
-				# files or directories as well.
-				while IFS="" read -r -d "" file ; do
-					find_array+=("$file");
-				done < <(find "$item" -print0)
-				for found_item in "${find_array[@]}"; do
-					owner=$(stat -c%U -- "$found_item");
-					if [[ -d "$found_item" ]]; then
-						object="directory";
-					else
-						object="file or link";
-					fi
-					if [[ "$owner" != "$me" ]]; then
-						owner_issues=1;
-						echo 1>&2 "*** The $object: \"$found_item\"  is owned by \"$owner\" and not \"$me\"";
-						echo 1>&2 "*** See the \"$HOME/rm_owner_issues.txt\" file for details";
-						error_text="The $object: $(echo \"$found_item\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
-						error_text="$error_text In order to remove the directory $(echo \"$item\" | sed -e 's/%/%%/g')\n";
-						error_text="$error_text this ownership issue needs to be corrected.\n";
-						report_owner_issues "$error_text";
-						regex2="^[^/].*$"; # should only match if it is not a real full path
-						if [[ "$found_item" =~ $regex2 ]]; then
-							echo "$pwd/$found_item">>"$HOME/rm_owner_file_list.txt";
-						else
-							echo "$found_item">>"$HOME/rm_owner_file_list.txt";
-						fi
-					fi
-				done
-			else
-				owner=$(stat -c%U -- "$item");
-				object="file or link";
-				if [[ "$owner" != "$me" ]]; then
-				    owner_issues=1;
-					echo 1>&2 "*** The $object: \"$item\"  is owned by \"$owner\" and not \"$me\"";
-					echo 1>&2 "*** See the \"$HOME/rm_owner_issues.txt\" file for details";
-					error_text="The $object: $(echo \"$item\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
-					report_owner_issues "$error_text";
-					regex2="^[^/].*$"; # should only match if it is not a real full path
-					if [[ "$item" =~ $regex2 ]]; then
-						echo "$pwd/$item">>"$HOME/rm_owner_file_list.txt";
-					else
-						echo "$item">>"$HOME/rm_owner_file_list.txt";
-					fi
-				fi
-			fi
-			if [[ $owner_issues -eq 0 ]]; then
-				files+=("$item");
-				escaped_item=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
-				regex="^.*['[:space:]].*$";
-				if [[ "$escaped_item" =~ $regex ]]; then
-					if [[ -z "$escaped_files" ]]; then
-						escaped_files="\"$escaped_item\"";
-					else
-						escaped_files="$escaped_files \"$escaped_item\"";
-					fi
-				else
-					if [[ -z "$escaped_files" ]]; then
-						escaped_files="$escaped_item";
-					else
-						escaped_files="$escaped_files $escaped_item";
-					fi
-				fi
-			fi
-	else
-		:
-		# If the item does not exist as a directory, file or link drop it
-		# and process the next item if any.
-		#echo 1>&2 "*** WARNING: can not remove \"$item\" since it does not exist";
-	fi
+    if [[ -e "$item" ]] || [[ -h "$item" ]]; then
+            # Exists as a directory, file or link so check ownership
+            if [[ -d "$item" ]]; then
+                # To be thorough, if we are talking about removing a directory
+                # we should report ownership issues for any of the contained
+                # files or directories as well.
+                while IFS="" read -r -d "" file ; do
+                    find_array+=("$file");
+                done < <(find "$item" -print0)
+                for found_item in "${find_array[@]}"; do
+                    owner=$(stat -c%U -- "$found_item");
+                    if [[ -d "$found_item" ]]; then
+                        object="directory";
+                    else
+                        object="file or link";
+                    fi
+                    if [[ "$owner" != "$me" ]]; then
+                        owner_issues=1;
+                        echo 1>&2 "*** The $object: \"$found_item\"  is owned by \"$owner\" and not \"$me\"";
+                        echo 1>&2 "*** See the \"$HOME/rm_owner_issues.txt\" file for details";
+                        error_text="The $object: $(echo \"$found_item\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+                        error_text="$error_text In order to remove the directory $(echo \"$item\" | sed -e 's/%/%%/g')\n";
+                        error_text="$error_text this ownership issue needs to be corrected.\n";
+                        report_owner_issues "$error_text";
+                        regex2="^[^/].*$"; # should only match if it is not a real full path
+                        if [[ "$found_item" =~ $regex2 ]]; then
+                            echo "$pwd/$found_item">>"$HOME/rm_owner_file_list.txt";
+                        else
+                            echo "$found_item">>"$HOME/rm_owner_file_list.txt";
+                        fi
+                    fi
+                done
+            else
+                owner=$(stat -c%U -- "$item");
+                object="file or link";
+                if [[ "$owner" != "$me" ]]; then
+                    owner_issues=1;
+                    echo 1>&2 "*** The $object: \"$item\"  is owned by \"$owner\" and not \"$me\"";
+                    echo 1>&2 "*** See the \"$HOME/rm_owner_issues.txt\" file for details";
+                    error_text="The $object: $(echo \"$item\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+                    report_owner_issues "$error_text";
+                    regex2="^[^/].*$"; # should only match if it is not a real full path
+                    if [[ "$item" =~ $regex2 ]]; then
+                        echo "$pwd/$item">>"$HOME/rm_owner_file_list.txt";
+                    else
+                        echo "$item">>"$HOME/rm_owner_file_list.txt";
+                    fi
+                fi
+            fi
+            if [[ $owner_issues -eq 0 ]]; then
+                files+=("$item");
+                escaped_item=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
+                regex="^.*['[:space:]].*$";
+                if [[ "$escaped_item" =~ $regex ]]; then
+                    if [[ -z "$escaped_files" ]]; then
+                        escaped_files="\"$escaped_item\"";
+                    else
+                        escaped_files="$escaped_files \"$escaped_item\"";
+                    fi
+                else
+                    if [[ -z "$escaped_files" ]]; then
+                        escaped_files="$escaped_item";
+                    else
+                        escaped_files="$escaped_files $escaped_item";
+                    fi
+                fi
+            fi
+    else
+        :
+        # We get in here if the file, directory or link does not exist.
+        # Note that we are always forcing the -f option to avoid the command
+        # going interactive, interactive mode does not work so well with a 
+        # wrapper script.   
+        if [ -z ${DISABLE_WRAPPER_WARNINGS+x} ]; then
+            # DISABLE_WRAPPER_WARNINGS is unset
+            # default behavior of rm is not to issue a text warning for missing 
+            # files if the -f parameter is issued 
+            DISABLE_WRAPPER_WARNINGS=1;
+            error_code_for_missing=1;# the default rm command does return an error 
+            # code of 1 for missing items even if the -f parameter is given
+        fi
+        if [[ "$DISABLE_WRAPPER_WARNINGS" -eq 0 ]]; then
+            echo 1>&2 "*** The \"rm\" command can not remove \"$item\" since it does not exist";
+            echo 1>&2 "*** See the \"$HOME/rm_syntax_errors.txt\" file for details";
+            error_text="The \"rm\" command can not remove $(echo \"$item\" | sed  -e 's/%/%%/g') since it does not exist\n";
+            report_errors "$error_text";
+        fi
+        if [[ "$DISABLE_WRAPPER_ERROR_CODES" -eq 0 ]]; then
+            error_code_for_missing=1;
+        fi
+    fi
 }
 # This "for" loop manages to process filenames or paths with white space or
 # special characters.
 for item in "$@"; do
-	if [[ $stopgettingoptions -eq 0 ]]; then
-		if [[ "$item" = '--' ]]; then
-			options+=("$item");
-			stopgettingoptions=1;
-			continue;
-		fi
-		if [[ "$item" = '--help' ]]; then
-			rm_audit_log "$DAISY_CHAIN \"--help\"\n";
-			$DAISY_CHAIN "--help";
-			exit 0;
-		fi
-		if [[ "$item" = '--version' ]]; then
-			rm_audit_log "$DAISY_CHAIN \"--version\"\n";
-			$DAISY_CHAIN "--version";
-			exit 0;
-		fi	
-		regex="^-(\S+)$";# There should never be "space" in the rm options.
-		if [[ "$item" =~ $regex ]]; then
-			parsed_option="${BASH_REMATCH[1]}";
-			regex="^.*f.*$"; # contains f
-			if [[ "$parsed_option" =~ $regex ]]; then
-				f_seen=1;
-			fi
-			options+=("$item");
-			continue;
-		fi
-		process_file;
-	else
-		process_file;
-	fi
+    if [[ $stopgettingoptions -eq 0 ]]; then
+        if [[ "$item" = '--' ]]; then
+            options+=("$item");
+            stopgettingoptions=1;
+            continue;
+        fi
+        # With options, spaces are assumed to delimit the options so we need
+        # continuation logic to process options that have been split with spaces.
+        if [[ $remnext -eq 1 ]]; then
+            if [[ "$item" != '=' ]]; then
+                remnext=0;
+            fi
+            continue;
+        fi
+        if [[ "$item" = '--help' ]]; then
+            rm_audit_log "$DAISY_CHAIN \"--help\"\n";
+            $DAISY_CHAIN "--help";
+            exit 0;
+        fi
+        if [[ "$item" = '--version' ]]; then
+            rm_audit_log "$DAISY_CHAIN \"--version\"\n";
+            $DAISY_CHAIN "--version";
+            exit 0;
+        fi  
+        if [[ "$item" = '--interactive' ]]; then
+            continue;
+        fi  
+        regex="^--interactive=(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                remnext=1;
+            fi
+            continue;
+        fi
+        if [[ "$item" = '--force' ]]; then
+            f_seen=1;
+        fi
+        regex="^--.+$";# catch other double hyphen options
+        if [[ "$item" =~ $regex ]]; then
+            options+=("$item");
+            continue;
+        fi
+        regex="^-(\S+)$";# By this point there could only be single - options
+        if [[ "$item" =~ $regex ]]; then
+            parsed_option="${BASH_REMATCH[1]}";
+            regex="^.*f.*$"; # contains f
+            if [[ "$parsed_option" =~ $regex ]]; then
+                f_seen=1;
+            fi
+            # Clean the letter i from the options
+            regex="^(-.*)[iI](.*)$";
+            while [[ "$item" =~ $regex ]];
+            do
+                item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
+            done
+            # No sense adding an empty option
+            if [[ "$item" != "-" ]]; then
+                options+=("$item");
+            fi
+            continue;
+        fi
+        process_file;
+    else
+        process_file;
+    fi
 done
 
 # If you decide not to force the -f option and comment out this switch addition,
 # then if the rm command run would require user interaction, it will appear as 
 # though this wrapper script has locked up.
 if [[ "$f_seen" -eq 0 ]]; then
-	options+=("-f");
+    options+=("-f");
 fi
 
 if [[ -n "${files[@]}" ]];then
-	error_file=$(mktemp -t rm.XXXXXXXXXX);# temporary file for stderr output
-	escaped_files="$(echo $escaped_files | sed -e 's/%/%%/g')";
-	set --; #clear passed arguments
-	set -- "${options[@]}" "${files[@]}"; #set new ones
-	$DAISY_CHAIN "$@" 2>"$error_file" || error_code="$?";
-	ERROR=$(<"$error_file");	
-	if [[ "$error_code" -ne 0 ]]; then
-		audit_text="ERROR: $ERROR";
-		echo "$ERROR" 1>&2; # output to stdout and stderr
-	fi
-	if [[ -n "${options[@]}" ]]; then
-		options="${options[@]}";# something odd with LFS required this step
-		rm_audit_log "$DAISY_CHAIN $options $escaped_files\n";
-	else
-		rm_audit_log "$DAISY_CHAIN $escaped_files\n";
-	fi
-	$DAISY_CHAIN "$error_file";# remove temporary file
+    # An interesting issue arose when installing tcl8.6.0. The package is setting
+    # a very restrictive umask for copy operations which resulted in the wrapper
+    # creating read only temporary files, which caused the wrapper to fail.
+    save_umask=$(umask);# backup the current umask
+    umask 0077; # set a usable umask
+    error_file=$(mktemp -t rm.XXXXXXXXXX);# temporary file for stderr output
+    umask "$save_umask";# restore backed up umask
+    escaped_files="$(echo $escaped_files | sed -e 's/%/%%/g')";
+    set --; #clear passed arguments
+    set -- "${options[@]}" "${files[@]}"; #set new ones
+    $DAISY_CHAIN "$@" 2>"$error_file" || error_code="$?";
+    ERROR=$(<"$error_file");    
+    if [[ "$error_code" -ne 0 ]]; then
+        audit_text="ERROR: $ERROR";
+        echo "$ERROR" 1>&2; # output to stdout and stderr
+    fi
+    if [[ -n "${options[@]}" ]]; then
+        options="${options[@]}";# something odd with LFS required this step
+        rm_audit_log "$DAISY_CHAIN $options $escaped_files\n";
+    else
+        rm_audit_log "$DAISY_CHAIN $escaped_files\n";
+    fi
+    $DAISY_CHAIN "$error_file";# remove temporary file
 fi
-
+# Carry forward error codes from any missing items
+if [[ $error_code_for_missing -eq 1 ]]; then
+    error_code="$error_code_for_missing";
+fi
 exit $error_code;

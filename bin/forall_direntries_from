@@ -3,6 +3,10 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 
+# Modified by Robert Taylor Nov 2013
+# Modified to included /root /sources and /patches as pruned directories,
+# modified find to hide 'Permission denied' output.
+
 #The following list should contain the mount points of all filesystems
 #that are to be scanned as a space-separated list within parentheses. 
 #/ will usually be in this list and if you have /usr
@@ -23,7 +27,7 @@ fs_to_scan=(/)
 #NOTE: The LFS-6.0 book uses a ramfs mounted on /dev and with that setup
 #/dev does not need to be in the prune list. But since there is no requirement
 #that /dev have its own filesystem it's better to prune it explicitly.
-prune_prefixes=(/home /usr/src /dev /tools /root) #NO TRAILING SLASHES!!!!
+prune_prefixes=(/home /usr/src /dev /tools /root /sources /patches) #NO TRAILING SLASHES!!!!
 
 if [ $# -lt 1 -o "$1" = "--help" ]; then
   echo 1>&2
@@ -98,4 +102,6 @@ y[${#y[@]}]=')'
 #The -true before "$@" ensures that -depth can be passed as only parameter.
 find "${fs_to_scan[@]}" $depth -xdev -noleaf \
      -not \( \( "${y[@]}" -prune \) -or "${y[@]}" \) \
-     -and \( "${ugmatcher[@]}" \) -and \( -true "$@" \)
+     -and \( "${ugmatcher[@]}" \) -and \( -true "$@" \) 2>&1 | 
+     grep -v 'Permission denied'
+exit 0;

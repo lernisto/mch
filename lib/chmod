@@ -9,17 +9,17 @@ UNLINK_BYPASS="";
 me=$(whoami);
 reportmsg="chmod";
 for item in "$@"; do
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-	    regex="^(.*=)(.*['[:space:]].*)$";
-	    if [[ "$item" =~ $regex ]]; then
-			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
-		else
-			reportmsg="$reportmsg \"$item\"";
-		fi
-	else
-		reportmsg="$reportmsg $item";
-	fi
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
 done
 
 for p in $(type -ap chmod) ; do
@@ -31,8 +31,15 @@ if [ -z "$DAISY_CHAIN" ]; then
   exit 1;
 fi
 
-if [ $UID -eq 0 ]; then
-  $DAISY_CHAIN "$@";
+error_code=0;
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
 
 for p in $(type -ap unlink) ; do
@@ -58,192 +65,195 @@ item="";
 pwd=$(pwd);
 pass_error=0;
 error_code=0;
+error_code_for_missing=0;
 audit_text="";
 
 report_filtered(){
-	echo 1>&2 "*** Filtered out setuid and/or setgid";
-	echo 1>&2 "*** See the $HOME/chmod_filtered_options.txt file for details";
-	text="\n";
-	text="$text ------ Filtered out setuid and/or setgid ------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
-	text="$text after: chmod$options $(echo $escaped_files | sed  -e 's/%/%%/g')\n";
-	if [[ $doit -eq 0 ]]; then
-		text="$text Due to a missing mode after alteration the command was not run.\n";
-	fi
-	printf "$text" >>"$HOME/chmod_filtered_options.txt";
+    echo 1>&2 "*** Filtered out setuid and/or setgid";
+    echo 1>&2 "*** See the $HOME/chmod_filtered_options.txt file for details";
+    text="\n";
+    text="$text ------ Filtered out setuid and/or setgid ------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text after: chmod$options $(echo $escaped_files | sed  -e 's/%/%%/g')\n";
+    if [[ $doit -eq 0 ]]; then
+        text="$text Due to a missing mode after alteration the command was not run.\n";
+    fi
+    printf "$text" >>"$HOME/chmod_filtered_options.txt";
 }
 report_errors(){
-	text="\n";
-	text="$text ------chmod command syntax errors-------------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/chmod_syntax_errors.txt";
+    text="\n";
+    text="$text ------chmod command syntax errors-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/chmod_syntax_errors.txt";
 }
 report_owner_issues(){
-	text="\n";
-	text="$text ------file ownership issues-------------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text $1\n";
-	printf "$text" >>"$HOME/chmod_owner_issues.txt";
+    text="\n";
+    text="$text ------file ownership issues-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/chmod_owner_issues.txt";
 }
 chmod_audit_log(){
-	text="\n";
-	text="$text ------ original command -------------\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text ------ one of the resulting commands actually run -------\n";
-	text="$text $1";
-	if [[ -n "$audit_text" ]]; then
-		text="$text error_code is: $error_code\n";
-		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
-		printf "$text" >>"$HOME/chmod_errors.txt";
-	fi
-	# while debugging the wrapper you may wish to uncomment the following line
-	#printf "$text" >>"$HOME/chmod_audit.txt";
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text ------ one of the resulting commands actually run -------\n";
+    text="$text $1";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/chmod_errors.txt";
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all chmod commands actually run
+        printf "$text" >>"$HOME/chmod_audit.txt";
+    fi
 }
 
 add_escaped_file(){
-	temp=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
-	regex="^.*['[:space:]].*$";
-	if [[ "$temp" =~ $regex ]]; then
-		escaped_files="$escaped_files \"$temp\"";
-	else
-		escaped_files="$escaped_files $temp";
-	fi
+    temp=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
+    regex="^.*['[:space:]].*$";
+    if [[ "$temp" =~ $regex ]]; then
+        escaped_files="$escaped_files \"$temp\"";
+    else
+        escaped_files="$escaped_files $temp";
+    fi
 }
 
 # This for loop manages to process filenames or paths with white space or
 # special characters.
 for item in "$@"; do
-	if [[ $stopgettingoptions -eq 0 ]]; then
-		if [[ "$item" = '--' ]]; then
-			options="$options $item";
-			stopgettingoptions=1;
-			continue;
-		fi
-		# With options, spaces are assumed to delimit the options so we need
-		# continuation logic to process options that have been split with spaces.
-		if [[ $remnext -eq 1 ]]; then
-			if [[ "$item" != '=' ]]; then
-				remnext=0;
-			fi
-			continue;
-		fi
-		if [[ "$item" = '--help' ]]; then
-			chmod_audit_log "$DAISY_CHAIN \"--help\"\n";
-			$DAISY_CHAIN "--help";
-			exit 0;
-		fi
-		if [[ "$item" = '--version' ]]; then
-			chmod_audit_log "$DAISY_CHAIN \"--version\"\n";
-			$DAISY_CHAIN "--version";
-			exit 0;
-		fi			
-		if [[ $foundmode -eq 0 ]]; then
-			regex="^--reference[=]*(.*)$";
-			if [[ "$item" =~ $regex ]]; then
-				# I'm removing this since, I don't really want to have to
-				# analyze referenced files for whether their mode is acceptable.
-				report=1;
-				doit=0;
-				foundmode=1;
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					remnext=1;
-				fi
-				continue;
-			fi
-			# We need to support some new rather undocumented behavior of
-			# chmod, mkdir and install supporting more than 4 digit OCTAL-MODE
-			regex="^.*([0-7@])([0-7][0-7][0-7])$";
-			if [[ "$item" =~ $regex ]]; then
-				secondpart="${BASH_REMATCH[2]}";
-				firstpart="";
-				foundmode=1;
-				if [[ -n "${BASH_REMATCH[1]}" ]]; then
-					regex="^([01])$";
-					if [[ "${BASH_REMATCH[1]}" =~ $regex ]]; then
-						firstpart="${BASH_REMATCH[1]}";
-					else
-						report=1;
-					fi
-				fi
-				options="$options $firstpart$secondpart";
-				continue;
-			fi
-			# This supports 1 to 3 digits for mode setting
-			regex="^([0-7]?[0-7]?[0-7])$";
-			if [[ "$item" =~ $regex ]]; then			
-				firstpart="${BASH_REMATCH[1]}";
-				foundmode=1;
-				options="$options $firstpart";
-				continue;
-			fi
-			regex="^[^-]*[\+=-][rwxXstugo]+.*$";
-			if [[ "$item" =~ $regex ]]; then
-				foundmode=1;
-				regex="^.*[\+=-][rwxXtugo]+.*$";
-				if [[ "$item" =~ $regex ]]; then
-						:
-						# we see stuff we want to keep
-					else
-					regex="^[^rwxXt]+$";
-					if [[ "$item" =~ $regex ]]; then
-						# there is only stuff we want to get rid of
-						report=1;
-						doit=0;
-						continue;
-					fi
-				fi
-				# Clean out the "s" characters from the mode
-				regex="^(.*[\+=-][^,]*)s(.*)$";
-				while [[ "$item" =~ $regex ]];	do
-					report=1;
-					item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
-				done
-				# Clean up invalid parameters. A comma can not follow a "+" or "-". I
-				# would prefer if it did not follow an "=".
-				regex="^(.*)[ouga]+[\+=-],(.*)$";
-				while [[ "$item" =~ $regex ]];	do
-					item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
-				done
-				# A comma can not follow a "+" or "-" at the beginning
-				regex="^[\+=-],(.*)$";
-				while [[ "$item" =~ $regex ]];	do
-					item="${BASH_REMATCH[1]}";
-				done
-				# "+=-" should not be sandwiched by 2 commas
-				regex="^(.*,)[\+=-],(.*)$";
-				while [[ "$item" =~ $regex ]];	do
-					item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
-				done
-				# A "+" or "-" can not be the last character. I would prefer if an "="
-				# was not the last character.
-				regex="^(.*)[ouga,]+[\+=-]$";
-				while [[ "$item" =~ $regex ]];	do
-					item="${BASH_REMATCH[1]}";
-				done
-				# A "," can not be the last character
-				regex="^(.*),$";
-				while [[ "$item" =~ $regex ]];	do	
-					item="${BASH_REMATCH[1]}";
-				done
-				options="$options $item";
-				continue;
-			fi
-		fi
-		regex="^-.+$";# catch all other options
-		if [[ "$item" =~ $regex ]]; then
-			options="$options $item";
-			continue;
-		fi
-		files+=("$item");
-		add_escaped_file;
-	else
-		files+=("$item");
-		add_escaped_file;
-	fi
+    if [[ $stopgettingoptions -eq 0 ]]; then
+        if [[ "$item" = '--' ]]; then
+            options="$options $item";
+            stopgettingoptions=1;
+            continue;
+        fi
+        # With options, spaces are assumed to delimit the options so we need
+        # continuation logic to process options that have been split with spaces.
+        if [[ $remnext -eq 1 ]]; then
+            if [[ "$item" != '=' ]]; then
+                remnext=0;
+            fi
+            continue;
+        fi
+        if [[ "$item" = '--help' ]]; then
+            chmod_audit_log "$DAISY_CHAIN \"--help\"\n";
+            $DAISY_CHAIN "--help";
+            exit 0;
+        fi
+        if [[ "$item" = '--version' ]]; then
+            chmod_audit_log "$DAISY_CHAIN \"--version\"\n";
+            $DAISY_CHAIN "--version";
+            exit 0;
+        fi          
+        if [[ $foundmode -eq 0 ]]; then
+            regex="^--reference[=]*(.*)$";
+            if [[ "$item" =~ $regex ]]; then
+                # I'm removing this since, I don't really want to have to
+                # analyze referenced files for whether their mode is acceptable.
+                report=1;
+                doit=0;
+                foundmode=1;
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    remnext=1;
+                fi
+                continue;
+            fi
+            # We need to support some new rather undocumented behavior of
+            # chmod, mkdir and install supporting more than 4 digit OCTAL-MODE
+            regex="^.*([0-7@])([0-7][0-7][0-7])$";
+            if [[ "$item" =~ $regex ]]; then
+                secondpart="${BASH_REMATCH[2]}";
+                firstpart="";
+                foundmode=1;
+                if [[ -n "${BASH_REMATCH[1]}" ]]; then
+                    regex="^([01])$";
+                    if [[ "${BASH_REMATCH[1]}" =~ $regex ]]; then
+                        firstpart="${BASH_REMATCH[1]}";
+                    else
+                        report=1;
+                    fi
+                fi
+                options="$options $firstpart$secondpart";
+                continue;
+            fi
+            # This supports 1 to 3 digits for mode setting
+            regex="^([0-7]?[0-7]?[0-7])$";
+            if [[ "$item" =~ $regex ]]; then            
+                firstpart="${BASH_REMATCH[1]}";
+                foundmode=1;
+                options="$options $firstpart";
+                continue;
+            fi
+            regex="^[^-]*[\+=-][rwxXstugo]+.*$";
+            if [[ "$item" =~ $regex ]]; then
+                foundmode=1;
+                regex="^.*[\+=-][rwxXtugo]+.*$";
+                if [[ "$item" =~ $regex ]]; then
+                        :
+                        # we see stuff we want to keep
+                    else
+                    regex="^[^rwxXt]+$";
+                    if [[ "$item" =~ $regex ]]; then
+                        # there is only stuff we want to get rid of
+                        report=1;
+                        doit=0;
+                        continue;
+                    fi
+                fi
+                # Clean out the "s" characters from the mode
+                regex="^(.*[\+=-][^,]*)s(.*)$";
+                while [[ "$item" =~ $regex ]];  do
+                    report=1;
+                    item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
+                done
+                # Clean up invalid parameters. A comma can not follow a "+" or "-". I
+                # would prefer if it did not follow an "=".
+                regex="^(.*)[ouga]+[\+=-],(.*)$";
+                while [[ "$item" =~ $regex ]];  do
+                    item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
+                done
+                # A comma can not follow a "+" or "-" at the beginning
+                regex="^[\+=-],(.*)$";
+                while [[ "$item" =~ $regex ]];  do
+                    item="${BASH_REMATCH[1]}";
+                done
+                # "+=-" should not be sandwiched by 2 commas
+                regex="^(.*,)[\+=-],(.*)$";
+                while [[ "$item" =~ $regex ]];  do
+                    item="${BASH_REMATCH[1]}${BASH_REMATCH[2]}";
+                done
+                # A "+" or "-" can not be the last character. I would prefer if an "="
+                # was not the last character.
+                regex="^(.*)[ouga,]+[\+=-]$";
+                while [[ "$item" =~ $regex ]];  do
+                    item="${BASH_REMATCH[1]}";
+                done
+                # A "," can not be the last character
+                regex="^(.*),$";
+                while [[ "$item" =~ $regex ]];  do  
+                    item="${BASH_REMATCH[1]}";
+                done
+                options="$options $item";
+                continue;
+            fi
+        fi
+        regex="^-.+$";# catch all other options
+        if [[ "$item" =~ $regex ]]; then
+            options="$options $item";
+            continue;
+        fi
+        files+=("$item");
+        add_escaped_file;
+    else
+        files+=("$item");
+        add_escaped_file;
+    fi
 done
 
 if [[ $report -eq 1 ]]; then report_filtered; fi
@@ -251,57 +261,72 @@ if [[ $report -eq 1 ]]; then report_filtered; fi
 # At this point we have split options from files.
 
 if [ $doit -eq 1 ]; then
-	error_file=$(mktemp -t chmod.XXXXXXXXXX);# temporary file for stderr output
-	for file in "${files[@]}"; do
-		error_code=0;
-		audit_text="";
-		if [[ -e "$file" ]] || [[ -h "$file" ]]; then
-			if [[ ( -L "$file" ) && ( ! -e "$file" ) ]]; then
-				# chmod will not operate on a dangling symlink
-				echo 1>&2 "*** The link: \"$file\" is dangling (it points to nothing)";
-				echo 1>&2 "*** See the \"$HOME/chmod_syntax_errors.txt\" file for details";
-				error_text="The link: $(echo \"$file\" | sed  -e 's/%/%%/g') is dangling (it points to nothing)\n";
-				error_text="$error_text chmod will not operate on a dangling symlink.\n";
-				report_errors "$error_text";
-				continue;# skip this one
-			fi
-			# In the case of a link, chmod actually acts on the file 'pointed to'
-			# and it is the ownership of the file 'pointed to' that matters.
-			realfile=$(readlink -f -- "$file");
-			owner=$(stat -c%U -- "$realfile");
-			if [[ -d "$realfile" ]]; then
-				object="directory";
-			else
-				object="file";
-			fi
-			if [[ "$owner" != "$me" ]]; then
-				echo 1>&2 "*** The $object: \"$realfile\" is owned by \"$owner\" and not \"$me\"";
-				echo 1>&2 "*** See the \"$HOME/chmod_owner_issues.txt\" file for details";
-				error_text="The $object: $(echo \"$realfile\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
-				if [[ -L "$file" ]]; then
-					error_text="$error_text Chmod was run against a link, and in the case of a link,\n"
-					error_text="$error_text it is the ownership of the 'pointed to' file that matters.\n"
-				fi
-				error_text="$error_text$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
-				report_owner_issues "$error_text";
-				echo "$realfile">>"$HOME/chmod_owner_file_list.txt";
-				continue;# skip this one
-			fi			
-			$DAISY_CHAIN $options "$file" 2>"$error_file" || error_code="$?";
-			ERROR=$(<"$error_file");			
-			if [[ "$error_code" -ne 0 ]]; then
-				audit_text="ERROR: $ERROR";
-				echo "$ERROR" 1>&2; # output to stdout and stderr
-				pass_error="$error_code"; # preserve any error code for exit
-			fi
-			chmod_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
-		else
-			echo 1>&2 "*** The item \"$file\" does not exist.";
-			echo 1>&2 "*** See the \"$HOME/chmod_syntax_errors.txt\" file for details";
-			error_text="The item $(echo \"$file\" | sed  -e 's/%/%%/g') does not exist.\n";
-			report_errors "$error_text";
-		fi
-	done
-	$UNLINK_BYPASS "$error_file"; # remove temporary file
+    # An interesting issue arose when installing tcl8.6.0. The package is setting
+    # a very restrictive umask for copy operations which resulted in the wrapper
+    # creating read only temporary files, which caused the wrapper to fail.
+    save_umask=$(umask);# backup the current umask
+    umask 0077; # set a usable umask
+    error_file=$(mktemp -t chmod.XXXXXXXXXX);# temporary file for stderr output
+    umask "$save_umask";# restore backed up umask
+    for file in "${files[@]}"; do
+        error_code=0;
+        audit_text="";
+        if [[ -e "$file" ]] || [[ -h "$file" ]]; then
+            if [[ ( -L "$file" ) && ( ! -e "$file" ) ]]; then
+                # chmod will not operate on a dangling symlink
+                echo 1>&2 "*** The link: \"$file\" is dangling (it points to nothing)";
+                echo 1>&2 "*** See the \"$HOME/chmod_syntax_errors.txt\" file for details";
+                error_text="The link: $(echo \"$file\" | sed  -e 's/%/%%/g') is dangling (it points to nothing)\n";
+                error_text="$error_text chmod will not operate on a dangling symlink.\n";
+                report_errors "$error_text";
+                continue;# skip this one
+            fi
+            # In the case of a link, chmod actually acts on the file 'pointed to'
+            # and it is the ownership of the file 'pointed to' that matters.
+            realfile=$(readlink -f -- "$file");
+            owner=$(stat -c%U -- "$realfile");
+            if [[ -d "$realfile" ]]; then
+                object="directory";
+            else
+                object="file";
+            fi
+            if [[ "$owner" != "$me" ]]; then
+                echo 1>&2 "*** The $object: \"$realfile\" is owned by \"$owner\" and not \"$me\"";
+                echo 1>&2 "*** See the \"$HOME/chmod_owner_issues.txt\" file for details";
+                error_text="The $object: $(echo \"$realfile\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+                if [[ -L "$file" ]]; then
+                    error_text="$error_text Chmod was run against a link, and in the case of a link,\n"
+                    error_text="$error_text it is the ownership of the 'pointed to' file that matters.\n"
+                fi
+                error_text="$error_text$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
+                report_owner_issues "$error_text";
+                echo "$realfile">>"$HOME/chmod_owner_file_list.txt";
+                continue;# skip this one
+            fi          
+            $DAISY_CHAIN $options "$file" 2>"$error_file" || error_code="$?";
+            ERROR=$(<"$error_file");            
+            if [[ "$error_code" -ne 0 ]]; then
+                audit_text="ERROR: $ERROR";
+                echo "$ERROR" 1>&2; # output to stdout and stderr
+                pass_error="$error_code"; # preserve any error code for exit
+            fi
+            chmod_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g')\n";
+        else
+            if [[ "$DISABLE_WRAPPER_WARNINGS" -eq 0 ]]; then
+                echo 1>&2 "*** The target \"$file\" for the \"chmod\" command does not exist.";
+                echo 1>&2 "*** See the \"$HOME/chmod_syntax_errors.txt\" file for details";
+                error_text="The target $(echo \"$file\" | sed  -e 's/%/%%/g') for the \"chmod\" command does not exist.\n";
+                report_errors "$error_text";
+            fi
+            if [[ "$DISABLE_WRAPPER_ERROR_CODES" -eq 0 ]]; then
+                error_code_for_missing=1;
+            fi
+        fi
+    done
+    $UNLINK_BYPASS "$error_file"; # remove temporary file
+fi
+# Carry forward error codes from any missing items
+if [[ $error_code_for_missing -eq 1 ]]; then
+    pass_error="$error_code_for_missing";
 fi
 exit $pass_error;

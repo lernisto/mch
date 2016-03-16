@@ -5,6 +5,20 @@
 # 
 # Altered by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
 DAISY_CHAIN="";
+reportmsg="chgrp";
+for item in "$@"; do
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
+done
 
 for p in $(type -ap chgrp) ; do
   if [ ! $p -ef $0 ]; then DAISY_CHAIN="$p" ; break ; fi
@@ -15,10 +29,30 @@ if [ -z "$DAISY_CHAIN" ]; then
   exit 1;
 fi
 
-echo 1>&2 '***' chgrp "$@";
-
-if [ $UID -eq 0 ]; then
-  exec $DAISY_CHAIN "$@";
+error_code=0;
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+pwd=$(pwd);
+
+chgrp_audit_log(){  
+    echo 1>&2 "*** Prevented the \"$reportmsg\" command from executing.";
+    echo 1>&2 "*** See the $HOME/chgrp_audit.txt file for details";
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text The execution of this command was prevented. Run as root if desired.\n";
+    printf "$text" >>"$HOME/chgrp_audit.txt";
+}
+
+chgrp_audit_log;
 
 exit 0;

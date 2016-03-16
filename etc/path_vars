@@ -1,0 +1,4 @@
+# Avoiding potential issues by sourcing these from this file instead of setting
+# environment variables which could be changed accidentally by the user.
+wrappers_path="/usr/lib/pkgusr";
+path_without_wrappers=/bin:/usr/bin:/sbin:/usr/sbin;

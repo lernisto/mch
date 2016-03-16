@@ -1,0 +1,20 @@
+#!/bin/bash
+# Author: Robert Taylor
+# Date: Nov 14, 2013
+# Should be run as root.
+# Look for executables that show tools in the path for the interpreter
+search_dirs=$(echo /{usr,var,opt,lib,bin,sbin,etc});
+while IFS="" read -r -d "" file ; do
+    tools_interpreter=$(readelf -l "$file" 2>/dev/null |grep tools );
+    if [[ -n "$tools_interpreter" ]]; then
+      echo "filename: $file";
+      owner=$(stat -c%U -- "$file");
+      echo "owner: $owner";
+      group=$(stat -c%G -- "$file");
+      echo "group: $group";    
+      echo "Interpreter: $tools_interpreter";
+      echo
+    fi
+done < <(find $search_dirs -not -path "/usr/src*" \
+    -type f -perm +111 -print0)
+exit 0;

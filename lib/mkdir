@@ -9,17 +9,17 @@ UNLINK_BYPASS="";
 me=$(whoami);
 reportmsg="mkdir";
 for item in "$@"; do
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-	    regex="^(.*=)(.*['[:space:]].*)$";
-	    if [[ "$item" =~ $regex ]]; then
-			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
-		else
-			reportmsg="$reportmsg \"$item\"";
-		fi
-	else
-		reportmsg="$reportmsg $item";
-	fi
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
 done
 
 for p in $(type -ap mkdir) ; do
@@ -31,8 +31,15 @@ if [ -z "$DAISY_CHAIN" ]; then
   exit 1;
 fi
 
-if [[ $UID -eq 0 ]]; then
-  $DAISY_CHAIN "$@";
+error_code=0;
+#if [[ $UID -eq 0 ]]; then
+#  $DAISY_CHAIN "$@" || error_code="$?";
+#  exit $error_code; #pass back any error code
+#fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
 fi
 
 for p in $(type -ap unlink) ; do
@@ -51,43 +58,53 @@ item="";
 pass_error=0;
 pwd=$(pwd);
 error_code=0;
+existing_dir_error_code=0;
 audit_text="";
 
 report_filtered(){
-	echo 1>&2 "*** Filtered out setuid and/or setgid";
-	echo 1>&2 "*** See the $HOME/mkdir_filtered_options.txt file for details";
-	text="\n";
-	text="$text ------ Filtered out setuid and/or setgid ------\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
-	text="$text after: mkdir$options$(echo $escaped_files | sed  -e 's/%/%%/g')\n";
-	printf "$text" >>"$HOME/mkdir_filtered_options.txt";
+    echo 1>&2 "*** Filtered out setuid and/or setgid";
+    echo 1>&2 "*** See the $HOME/mkdir_filtered_options.txt file for details";
+    text="\n";
+    text="$text ------ Filtered out setuid and/or setgid ------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text before: $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text after: mkdir$options$(echo $escaped_files | sed  -e 's/%/%%/g')\n";
+    printf "$text" >>"$HOME/mkdir_filtered_options.txt";
 }
-
+report_errors(){
+    text="\n";
+    text="$text ------mkdir command syntax errors-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/mkdir_syntax_errors.txt";
+}
 mkdir_audit_log(){
-	text="\n";
-	text="$text ------ original command -------------\n";
-	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
-	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
-	text="$text ------ one of the resulting commands actually run -------\n";
-	text="$text $1";
-	if [[ -n "$audit_text" ]]; then
-		text="$text error_code is: $error_code\n";
-		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
-		printf "$text" >>"$HOME/mkdir_errors.txt";
-	fi
-	# while debugging this wrapper you may want to uncomment the following line
-	#printf "$text" >>"$HOME/mkdir_audit.txt";
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text ------ one of the resulting commands actually run -------\n";
+    text="$text $1";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/mkdir_errors.txt";
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all mkdir commands actually run
+        printf "$text" >>"$HOME/mkdir_audit.txt";
+    fi
 }
 
 add_escaped_file(){
-	lastitem=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
-	regex="^.*['[:space:]].*$";
-	if [[ "$item" =~ $regex ]]; then
-		escaped_files="$escaped_files \"$item\"";
-	else
-		escaped_files="$escaped_files $item";
-	fi
+    lastitem=$(echo "$item" | sed -e 's/\\/\\\\/g' -e 's/"/\\\\"/g');
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        escaped_files="$escaped_files \"$item\"";
+    else
+        escaped_files="$escaped_files $item";
+    fi
 }
 
 # Syntax
@@ -109,105 +126,106 @@ add_escaped_file(){
 # This for loop manages to process filenames or paths with white space or
 # special characters.
 for item in "$@"; do
-	if [[ $stopgettingoptions -eq 0 ]]; then
-		if [[ "$item" = '--' ]]; then
-			options="$options $item";
-			stopgettingoptions=1;
-			continue;
-		fi
-		# With options, spaces are assumed to delimit the options so we need
-		# continuation logic to process options that have been split with spaces.
-		if [[ $addnext -eq 1 ]];then
-			if [[ "$item" = '=' ]]; then
-				options="$options $item";
-			else
-				addnext=0;
-				options="$options $item";
-			fi
-			continue;
-		fi
-		# Handle double hyphen options first
-		if [[ "$item" = '--help' ]]; then
-			mkdir_audit_log "$DAISY_CHAIN \"--help\"\n";
-			$DAISY_CHAIN "--help";
-			exit 0;
-		fi
-		if [[ "$item" = '--version' ]]; then
-			mkdir_audit_log "$DAISY_CHAIN \"--version\"\n";
-			$DAISY_CHAIN "--version";
-			exit 0;
-		fi
-		regex="^--context[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^--mode[=]*(.*)$";
-		if [[ "$item" =~ $regex ]]; then
-			if [[ -z "${BASH_REMATCH[1]}" ]]; then
-				addnext=1;
-			fi
-			options="$options $item";
-			continue;
-		fi
-		regex="^--.+$";# catch other double hyphen options
-		if [[ "$item" =~ $regex ]]; then
-			options="$options $item";
-			continue;
-		fi	
-		# these options can be mashed all together mostly
-		regex="^-([^-]+)$";# single hyphen option(s)
-		if [[ "$item" =~ $regex ]]; then
-			mashed="${BASH_REMATCH[1]}";
-			out_options="-";
-			out_flag=0;
-			olength=${#mashed};
-			# We need to process these options from left to right
-			for (( i=0; i<$olength; i++ )); do
-				ochar=${mashed:$i:1};
-				case "$ochar" in
-					[pv])  out_flag=1;# An option we want to keep
-						out_options="$out_options$ochar";
-						;;					
-					*) 	remainder=$((olength-i));
-						mashed=${mashed:$i:$remainder};# get remaining chars
-						break;
-				esac
-			done
-			# add these captured options if any
-			if [[ $out_flag -eq 1 ]]; then
-				options="$options $out_options";				
-			fi		
-			# The rest of these if I save them at all I want separated out.
-			# These options are special since if they were mashed with other
-			# options they would have to be at the end of the mess to be valid.	
-			regex="^m(.*)$"; # find any mode option
-			if [[ "$mashed" =~ $regex ]]; then
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					addnext=1;
-				fi
-				options="$options -m${BASH_REMATCH[1]}";
-				continue;				
-			fi
-			regex="^Z(.*)$"; # find any SELinux security context
-			if [[ "$mashed" =~ $regex  ]]; then
-				if [[ -z "${BASH_REMATCH[1]}" ]]; then
-					addnext=1;
-				fi
-				options="$options -Z${BASH_REMATCH[1]}";
-				continue;
-			fi
-			continue;
-		fi
-		files+=("$item");
-		add_escaped_file;
-	else
-		files+=("$item");
-		add_escaped_file;
-	fi
+    if [[ $stopgettingoptions -eq 0 ]]; then
+        if [[ "$item" = '--' ]]; then
+            options="$options $item";
+            stopgettingoptions=1;
+            continue;
+        fi
+        # With options, spaces are assumed to delimit the options so we need
+        # continuation logic to process options that have been split with spaces.
+        if [[ $addnext -eq 1 ]];then
+            if [[ "$item" = '=' ]]; then
+                options="$options $item";
+            else
+                addnext=0;
+                options="$options $item";
+            fi
+            continue;
+        fi
+        # Handle double hyphen options first
+        if [[ "$item" = '--help' ]]; then
+            mkdir_audit_log "$DAISY_CHAIN \"--help\"\n";
+            $DAISY_CHAIN "--help";
+            exit 0;
+        fi
+        if [[ "$item" = '--version' ]]; then
+            mkdir_audit_log "$DAISY_CHAIN \"--version\"\n";
+            $DAISY_CHAIN "--version";
+            exit 0;
+        fi
+        regex="^--context[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--mode[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--.+$";# catch other double hyphen options
+        if [[ "$item" =~ $regex ]]; then
+            options="$options $item";
+            continue;
+        fi  
+        # these options can be mashed all together mostly
+        regex="^-([^-]+)$";# single hyphen option(s)
+        if [[ "$item" =~ $regex ]]; then
+            mashed="${BASH_REMATCH[1]}";
+            out_options="-";
+            out_flag=0;
+            olength=${#mashed};
+            # We need to process these options from left to right
+            for (( i=0; i<$olength; i++ )); do
+                ochar=${mashed:$i:1};
+                case "$ochar" in
+                   [mZ]) remainder=$((olength-i));
+                         mashed=${mashed:$i:$remainder};# get remaining chars
+                         break;;
+                      *): # Save everything else, should support future options.
+                         out_flag=1;# An option we want to keep
+                         out_options="$out_options$ochar";
+                         ;;                     
+                esac
+            done
+            # add these captured options if any
+            if [[ $out_flag -eq 1 ]]; then
+                options="$options $out_options";                
+            fi      
+            # The rest of these if I save them at all I want separated out.
+            # These options are special since if they were mashed with other
+            # options they would have to be at the end of the mess to be valid. 
+            regex="^m(.*)$"; # find any mode option
+            if [[ "$mashed" =~ $regex ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    addnext=1;
+                fi
+                options="$options -m${BASH_REMATCH[1]}";
+                continue;               
+            fi
+            regex="^Z(.*)$"; # find any SELinux security context
+            if [[ "$mashed" =~ $regex  ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    addnext=1;
+                fi
+                options="$options -Z${BASH_REMATCH[1]}";
+                continue;
+            fi
+            continue;
+        fi
+        files+=("$item");
+        add_escaped_file;
+    else
+        files+=("$item");
+        add_escaped_file;
+    fi
 done
 
 # At this point we have split options from directories.
@@ -216,16 +234,16 @@ done
 # whole options string.
 
 doclean(){
-	regex=$1;
-	while [[ $options =~ $regex ]];
-	do
-		if [[ $notify -eq 1 ]]; then report=1; fi
-	    if [[ "${BASH_REMATCH[2]}" = "," ]];then
-		   options="${BASH_REMATCH[1]}${BASH_REMATCH[3]}";
-		else
-		   options="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}";
-		fi
-	done
+    regex=$1;
+    while [[ $options =~ $regex ]];
+    do
+        if [[ $notify -eq 1 ]]; then report=1; fi
+        if [[ "${BASH_REMATCH[2]}" = "," ]];then
+           options="${BASH_REMATCH[1]}${BASH_REMATCH[3]}";
+        else
+           options="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}";
+        fi
+    done
 }
 notify=0;
 # Keep only the last 4 digits of the OCTAL-MODE.
@@ -245,15 +263,15 @@ options="$options ";# we need a trailing space for the clean up to work
 # Because the characters "ugo" can occur on either side of the "="
 regex="(.*\s)(--mode|-m)\s*=*\s*\S*[\+=-][rwxXtugo]+\S*\s(.*)";
 if [[ $options =~ $regex ]]; then
-	:
-	# We probably want to keep some of this.
+    :
+    # We probably want to keep some of this.
 else
-	# eliminate any symbolic --mode setting that would be empty if we removed "s"
-	regex="(.*\s)--mode\s*=*\s*[^rwxXt[:space:]0-7]+\s(.*)";
-	doclean $regex;
-	# eliminate any symbolic -m setting that would be empty if we removed "s"
-	regex="(.*\s)-m\s*[^rwxXt[:space:]0-7]+\s(.*)";
-	doclean $regex;
+    # eliminate any symbolic --mode setting that would be empty if we removed "s"
+    regex="(.*\s)--mode\s*=*\s*[^rwxXt[:space:]0-7]+\s(.*)";
+    doclean $regex;
+    # eliminate any symbolic -m setting that would be empty if we removed "s"
+    regex="(.*\s)-m\s*[^rwxXt[:space:]0-7]+\s(.*)";
+    doclean $regex;
 fi
 notify=1;
 # eliminate any "s" option in the symbolic --mode parameters
@@ -286,24 +304,50 @@ doclean $regex;
 
 if [[ $report -eq 1 ]]; then report_filtered; fi
 
+# An interesting issue arose when installing tcl8.6.0. The package is setting
+# a very restrictive umask for copy operations which resulted in the wrapper
+# creating read only temporary files, which caused the wrapper to fail.
+save_umask=$(umask);# backup the current umask
+umask 0077; # set a usable umask
 error_file=$(mktemp -t mkdir.XXXXXXXXXX);# temporary file for stderr output
+umask "$save_umask";# restore backed up umask
+
 for directory in "${files[@]}"; do
-	error_code=0;
-	audit_text="";
-	if [[ -e "$directory" ]]; then
-		:
-		# We avoid most ownership issues by skipping existing directories
-		# echo "*** Directory already exists: \"$directory\""
-	else
-		$DAISY_CHAIN $options "$directory" 2>"$error_file" || error_code="$?";
-		ERROR=$(<"$error_file");
-		if [[ "$error_code" -ne 0 ]]; then
-			audit_text="ERROR: $ERROR";
-			echo "$ERROR" 1>&2; # output to stdout and stderr
-			pass_error="$error_code";
-		fi
-		mkdir_audit_log "$DAISY_CHAIN$options $(echo \"$directory\" | sed -e 's/%/%%/g')\n";
-	fi
+    error_code=0;
+    audit_text="";
+    if [[ -e "$directory" ]]; then
+        :
+        if [ -z ${DISABLE_WRAPPER_WARNINGS+x} ]; then
+            # DISABLE_WRAPPER_WARNINGS is unset
+            # default behavior of mkdir is to not issue a warning for already
+            # existing directories if the -p option is given
+            DISABLE_WRAPPER_WARNINGS=1;
+            existing_dir_error_code=1;# mkdir does return an error code of 1 for
+            # already existing directories even if the -p option is given
+        fi
+        if [[ "$DISABLE_WRAPPER_WARNINGS" -eq 0 ]]; then            
+            echo 1>&2 "*** The directory or file \"$directory\" already exists. Skipping...";
+            echo 1>&2 "*** See the \"$HOME/mkdir_syntax_errors.txt\" file for details";
+            error_text="The directory or file $(echo \"$directory\" | sed  -e 's/%/%%/g') already exists. Skipping...\n";
+            report_errors "$error_text";
+        fi
+        if [[ "$DISABLE_WRAPPER_ERROR_CODES" -eq 0 ]]; then
+            existing_dir_error_code=1;
+        fi      
+    else
+        $DAISY_CHAIN $options "$directory" 2>"$error_file" || error_code="$?";
+        ERROR=$(<"$error_file");
+        if [[ "$error_code" -ne 0 ]]; then
+            audit_text="ERROR: $ERROR";
+            echo "$ERROR" 1>&2; # output to stdout and stderr
+            pass_error="$error_code";
+        fi
+        mkdir_audit_log "$DAISY_CHAIN$options $(echo \"$directory\" | sed -e 's/%/%%/g')\n";
+    fi
 done
 $UNLINK_BYPASS "$error_file"; # remove temporary file
+# Carry forward error codes from any existing directory issues
+if [[ $existing_dir_error_code -eq 1 ]]; then
+    pass_error="$existing_dir_error_code";
+fi
 exit "$pass_error";

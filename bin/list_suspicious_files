@@ -3,6 +3,9 @@
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
 
+# Modified by Robert Taylor Nov 2013
+# Modified so that we can avoid showing 'Permission denied' errors from find
+
 #The following list should contain the mount points of all filesystems
 #that are to be scanned as a space-separated list within parentheses. 
 #/ will usually be in this list and if you have /usr
@@ -212,7 +215,9 @@ cmd=( "${usergroupmatch[@]}" -and
 #-prune has no effect and is always false when -depth is used.
 find "${fs_to_scan[@]}" -xdev -noleaf \
      -not \( \( "${y[@]}" -prune \) -or "${y[@]}" \) \
-     -and \( "${cmd[@]}" \) | 
+     -and \( "${cmd[@]}" \)  2>&1 | 
+grep -v 'Permission denied' |
 sed 's/^\(...2\) \([0-9]\+ 2 \)\?\([^ ]\+\) \+[^ ]\+ \+\([^ ]\+\) \+\([^ ]\+\) \+[^"]\+\(".\+\)/\1 \2\3 \6  \4:\5/' |
 sort -u | 
 sed 's/^...1 /\'$'\n''/;s/^...2 [0-9]\+ 1 /\'$'\n''  /;s/^...2 [0-9]\+ 2 /    /;s/^...2 /  /'
+exit 0;

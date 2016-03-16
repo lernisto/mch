@@ -1,0 +1,8 @@
+#!/bin/bash
+# Author: Robert Taylor
+# Date: Dec 9, 2013
+# Should be run as root.
+# This command will remove unneeded files with the .la extension.
+find /lib /usr/lib -not -path "*Image*" -a -name \*.la -delete
+# /lib64 and /usr/lib64 are just links
+exit 0;

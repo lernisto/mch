@@ -1,11 +1,54 @@
-#!bin/bash
+#!/bin/bash
 # Author: Robert Taylor
+# Date: Nov 2013
 # Should be run as root.
+regex="^.*(help).*$"; # contains help
+if [[ "$1" =~ $regex ]]; then
+    echo "----------------------------------------------------------";
+    echo "USAGE:";
+    echo "list_all_packages [parameters]";
+    echo "PARAMETERS:";
+    echo "    A space separated list of files that are contained in the";
+    echo "    user's home directory that you want to output as part of";
+    echo "    the package listing. Be careful with wildcard characters";
+    echo "    as each space separated parameter should only match one file.";
+    echo "list_all_packages";
+    echo "    With no parameters just the sorted list of package user names";
+    echo "    are output, one per line.";
+    echo "list_all_packages .project";
+    echo "    This will list all the contents of the .project file contained";
+    echo "    in each package user's home directory";
+    echo "list_all_packages build.conf";
+    echo "    This will list all the contents of the build.conf file contained";
+    echo "    in each package user's home directory";
+    echo "list_all_packages .bash_history";
+    echo "    This will list all the contents of the .bash_history file";
+    echo "    contained in each package user's home directory";
+    echo "list_all_packages *.lst";
+    echo "    This will list the \$pkg_owner.lst files contents for all";
+    echo "    package users";
+    echo "list_all_packages bogus help";
+    echo "    Ths will allow you to list the contents of a file called 'help'";
+    echo "    the file bogus doesn't have to exist.";
+    echo "\"list_all_packages help\" produces this help message.";
+    echo "----------------------------------------------------------";
+    exit 0;
+fi
 # Get the list of package users from the /etc/passwd file
-package_list=$(cat /etc/passwd|awk -F: '{if($3>999) print $1 }'|sort);
-while read -r line; do
-    echo "$line ...";
-    while read -r fileline; do
-echo "          $fileline";
-    done <<< "$(cat /usr/src/$line/README)"
-done <<< "$package_list"
+package_list=$(cat /etc/passwd|awk -F: '{if($3>9999) print $1 }'|sort);
+while read -r pkg_owner; do
+    echo "$pkg_owner";
+    for file in "$@"; do      
+      file=$(find /usr/src/$pkg_owner/ -type f -name "$file");
+      if [[ -e "$file" ]]; then
+        while IFS='' read -r fileline; do
+            printf "    %s\n" "$fileline";
+        done <"$file";
+        # if there was no linefeed on the last line...
+        if [[ -n "$fileline" ]] ; then
+           printf "    %s\n" "$fileline";
+        fi
+      fi
+    done    
+done <<< "$package_list";
+exit 0;

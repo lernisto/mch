@@ -29,3 +29,4 @@ echo '# then userdel will automatically delete the package user'"'"'s group if'
 echo '# its name is identical to the user name. Otherwise, if you want to delete'
 echo '# the package user'"'"'s group, you will need to use the `groupdel'"'"' command.'
 echo
+exit 0;

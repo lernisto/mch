@@ -289,3 +289,4 @@ forall_direntries_from "$ugname" "${cmd[@]}" | sort -u |
 } 
 
 list_suspicious_files_from "$ugname"
+exit 0;

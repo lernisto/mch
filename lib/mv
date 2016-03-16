@@ -1,0 +1,445 @@
+#!/bin/bash
+# Copyright (c) Robert Taylor <rtaylor777 AT gmail DOT com> Nov 2013
+# You may do everything with this code except misrepresent its origin.
+# PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+#
+DAISY_CHAIN="";
+me=$(whoami);
+reportmsg="mv";
+for item in "$@"; do
+    regex="^.*['[:space:]].*$";
+    if [[ "$item" =~ $regex ]]; then
+        regex="^(.*=)(.*['[:space:]].*)$";
+        if [[ "$item" =~ $regex ]]; then
+            reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+        else
+            reportmsg="$reportmsg \"$item\"";
+        fi
+    else
+        reportmsg="$reportmsg $item";
+    fi
+done
+
+for p in $(type -ap mv) ; do
+  if [ ! $p -ef $0 ]; then DAISY_CHAIN="$p"; break ; fi
+done
+
+if [ -z "$DAISY_CHAIN" ]; then
+  echo "Cannot find real ${0##*/} command";
+  exit 1;
+fi
+
+error_code=0;
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+if [[ "$DISABLE_WRAPPERS" -eq 1 ]]; then
+  $DAISY_CHAIN "$@" || error_code="$?";
+  exit $error_code; #pass back any error code
+fi
+
+for p in $(type -ap unlink) ; do
+  if [[ "$p" != "/usr/lib/pkgusr/unlink" ]]; then UNLINK_BYPASS="$p"; break ; fi
+done
+
+options="";
+# In order to preserve whitespace and special characters, "files" is an array
+files=();
+owner="";
+stopgettingoptions=0;
+addnext=0;
+remnext=0;
+f_seen=0;
+
+dest="";
+targetoption=0;
+gettarget=0;
+destisfile=0;
+sourcenum=0;
+item="";
+lastitem="";
+pwd=$(pwd);
+pass_error=0;
+error_code=0;
+error_code_for_missing=0;
+audit_text="";
+source_name="";
+owner_issues=0;
+error_condition=0;
+
+report_errors(){
+    text="\n";
+    text="$text ------mv command syntax errors-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed  -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/mv_syntax_errors.txt";
+}
+report_owner_issues(){
+    text="\n";
+    text="$text ------file ownership issues-------------\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text $1\n";
+    printf "$text" >>"$HOME/mv_owner_issues.txt";
+}
+mv_audit_log(){
+    text="\n";
+    text="$text ------ original command -------------\n";
+    text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+    text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+    text="$text ------ one of the resulting commands actually run -------\n";
+    text="$text $1";
+    if [[ -n "$audit_text" ]]; then
+        text="$text error_code is: $error_code\n";
+        text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+        printf "$text" >>"$HOME/mv_errors.txt"
+    fi
+    if [[ "$ENABLE_WRAPPER_AUDIT" -eq 1 ]]; then
+        # log all mv commands actually run
+        printf "$text" >>"$HOME/mv_audit.txt";
+    fi
+}
+
+# Syntax
+# Usage: mv [OPTION]... [-T] SOURCE DEST
+#   or:  mv [OPTION]... SOURCE... DIRECTORY
+#  r:  mv [OPTION]... -t DIRECTORY SOURCE...
+# Rename SOURCE to DEST, or move SOURCE(s) to DIRECTORY.
+
+# This for loop manages to process filenames or paths with white space or
+# special characters.
+for item in "$@"; do
+    if [[ $stopgettingoptions -eq 0 ]]; then
+        if [[ "$item" = '--' ]]; then
+            options="$options $item";
+            stopgettingoptions=1;
+            continue;
+        fi
+        # With options, spaces are assumed to delimit the options so we need
+        # continuation logic to process options that have been split with spaces.
+        if [[ $addnext -eq 1 ]];then
+            if [[ "$item" = '=' ]]; then
+                options="$options $item";
+            else
+                addnext=0;
+                options="$options $item";
+            fi
+            continue;
+        fi
+        if [[ $remnext -eq 1 ]]; then
+            if [[ "$item" != '=' ]]; then
+                if [[ $gettarget -eq 1 ]]; then
+                    gettarget=0;
+                    regex="^=(.*)$";
+                    if [[ "$item" =~ $regex ]]; then
+                        dest="${BASH_REMATCH[1]}";
+                    else
+                        dest="$item";
+                    fi
+                fi
+                remnext=0;
+            fi
+            continue;
+        fi
+        # Handle double hyphen options first
+        if [[ "$item" = '--help' ]]; then
+            mv_audit_log "$DAISY_CHAIN \"--help\"\n";
+            $DAISY_CHAIN "--help";
+            exit 0;
+        fi
+        if [[ "$item" = '--version' ]]; then
+            mv_audit_log "$DAISY_CHAIN \"--version\"\n";
+            $DAISY_CHAIN "--version";
+            exit 0;
+        fi  
+        if [[ "$item" = '--no-target-directory' ]]; then
+            destisfile=1;
+            options="$options $item";
+            continue;
+        fi      
+        regex="^--backup=(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi      
+        regex="^--suffix[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                addnext=1;
+            fi
+            options="$options $item";
+            continue;
+        fi
+        regex="^--target-directory[=]*(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            targetoption=1;
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                remnext=1;
+                gettarget=1;
+            else
+                dest="${BASH_REMATCH[1]}";
+            fi
+            continue;
+        fi
+        if [[ "$item" = '--interactive' ]]; then
+            continue;
+        fi  
+        regex="^--interactive=(.*)$";
+        if [[ "$item" =~ $regex ]]; then
+            if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                remnext=1;
+            fi
+            continue;
+        fi
+        if [[ "$item" = '--force' ]]; then
+            f_seen=1;
+        fi
+        regex="^--.+$";# catch other double hyphen options
+        if [[ "$item" =~ $regex ]]; then
+            options="$options $item";
+            continue;
+        fi      
+        # these options can be mashed all together mostly
+        regex="^-([^-]+)$";# single hyphen option(s)
+        if [[ "$item" =~ $regex ]]; then
+            mashed="${BASH_REMATCH[1]}";
+            out_options="-";
+            out_flag=0;
+            olength=${#mashed};
+            # We need to process these options from left to right
+            for (( i=0; i<$olength; i++ )); do
+                ochar=${mashed:$i:1};
+                case "$ochar" in
+                    [iI]): # drop i's
+                        ;;
+                    f)  f_seen=1;
+                        out_flag=1;# An option we want to keep
+                        out_options="$out_options$ochar";
+                        ;;
+                    [tS])   remainder=$((olength-i));
+                        mashed=${mashed:$i:$remainder};# get remaining chars
+                        break;;                
+                    *): # Save everything else, should support future options.
+                      out_flag=1;# An option we want to keep
+                      out_options="$out_options$ochar";
+                      ;;
+                esac
+            done
+            # add these captured options if any
+            if [[ $out_flag -eq 1 ]]; then
+                options="$options $out_options";                
+            fi
+            # The rest of these if I save them at all I want separated out.
+            # These options are special since if they were mashed with other
+            # options they would have to be at the end of the mess to be valid.
+            regex="^t(.*)$"; # find any target-directory option
+            if [[ "$mashed" =~ $regex ]]; then
+                targetoption=1;
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    remnext=1;
+                    gettarget=1;
+                else
+                    dest="${BASH_REMATCH[1]}"
+                fi
+                continue;
+            fi
+            regex="^S(.*)$"; # find any suffix option
+            if [[ "$mashed" =~ $regex  ]]; then
+                if [[ -z "${BASH_REMATCH[1]}" ]]; then
+                    addnext=1;
+                fi
+                options="$options -S${BASH_REMATCH[1]}";
+                continue;
+            fi
+            continue;
+        fi
+        if [[ -n "$lastitem" ]]; then
+            # add $lastitem to files array
+            sourcenum=$[$sourcenum+1];
+            files+=("$lastitem");           
+        fi
+        lastitem="$item";
+    else
+        if [[ -n "$lastitem" ]]; then
+            sourcenum=$[$sourcenum+1];
+            files+=("$lastitem");
+        fi
+        lastitem="$item";
+    fi
+done
+
+# If you decide not to force the -f option and comment out this switch addition,
+# then if the mv command run would require user interaction, it will appear as 
+# though this wrapper script has locked up.
+if [[ "$f_seen" -eq 0 ]]; then
+    options="$options -f";
+fi
+
+# The last item will either be the destination or one of the other files or
+# directories for the list.
+if [[ -n "$lastitem" ]]; then
+    if [[ $targetoption -eq 1 ]]; then
+        files+=("$lastitem"); # the last item should be one of the source files
+    else
+        dest="$lastitem";
+            if [[ $destisfile -eq 1 ]] && [[ -d "$dest" ]]; then
+            echo 1>&2 "*** The target \"$dest\" is a directory but is";
+            echo 1>&2 "*** supposed to be a file based on options indicated on the command line.";
+            echo 1>&2 "*** See the \"$HOME/mv_syntax_errors.txt\" file for details";
+            error_text="The target $(echo \"$dest\" | sed  -e 's/%/%%/g')\" is a directory but is\n";
+            error_text="$error_text supposed to be a file based on options indicated on the command line.";
+            report_errors "$error_text";
+            exit 1;
+        fi  
+        if [[ -f "$dest" ]] || [[ -h "$dest" ]]; then
+            # sometimes a link is to a directory so we don't want to mistakenly say
+            # it is a file.
+            if [[ ! -d "$dest" ]]; then
+                destisfile=1;
+            fi
+        fi
+        
+        if [[ $destisfile -eq 0 ]] && [[ ! -e "$dest" ]]; then
+            # destination does not exist
+            # With the mv command the source can be either a file or directory
+            # but only one source item can be indicated if the destination
+            # specified does not exist. We can overload this flag to also 
+            # represent that the destination file or directory does not exist.
+            destisfile=1;
+        fi
+        if [[ $sourcenum -gt 1 ]] && [[ $destisfile -eq 1 ]]; then
+            echo 1>&2 "*** There is more than one source file indicated but the";
+            echo 1>&2 "*** destination does not exist or is a file.";
+            echo 1>&2 "*** See the \"$HOME/mv_syntax_errors.txt\" file for details";
+            error_text="There is more than one source file indicated but the destination \n";
+            error_text="$error_text $(echo \"$dest\" | sed  -e 's/%/%%/g') does not exist or is a file.\n";
+            report_errors "$error_text";
+            exit 1;
+        fi
+    fi
+fi
+# At this point we have split options from files and even have already
+# determined the destination.
+
+# An interesting issue arose when installing tcl8.6.0. The package is setting
+# a very restrictive umask for copy operations which resulted in the wrapper
+# creating read only temporary files, which caused the wrapper to fail.
+save_umask=$(umask);# backup the current umask
+umask 0077; # set a usable umask
+error_file=$(mktemp -t mv.XXXXXXXXXX);# temporary file for stderr output
+umask "$save_umask";# restore backed up umask
+
+# Each call to this function checks for ownership of one source_name and 
+# of the corresponding dest_name and reports issues that are found.
+check_for_owner_issues() {
+    owner_issues=0;# Reset owner issues flag
+    error_condition=0;# Reset error condition flag
+    dest_name="$dest";
+    if [[ -e "$dest" ]]; then
+      # destination exists so lets check ownership
+      if [[ -d "$dest" ]]; then
+          # get the base name of any path in the source
+          basepart=$(basename "$source_name");
+          dest_name="$dest/$basepart"; # full destination specification
+          if [[ -d "$dest_name" ]]; then
+              # We are potentially overwritting an existing directory
+              if [[ $(ls -A "$dest_name") ]]; then
+                  # directory is not empty so the mv command would issue 
+                  # an error
+                  echo 1>&2 "*** The destination: \"$dest_name\" is a directory which contains files.";
+                  echo 1>&2 "*** The mv command would issue an error in this case";
+                  echo 1>&2 "*** See the \"$HOME/mv_syntax_errors.txt\" file for details";
+                  error_text="The destination: $(echo \"$dest_name\" | sed  -e 's/%/%%/g') is a directory which contains files.\n";
+                  error_text="$error_text The mv command would issue an error in this case\n";
+                  report_errors "$error_text";
+                  error_condition=1; # indicate an error condition
+              fi
+          fi
+      fi
+      if [[ -e "$dest_name" ]] || [[ -h "$dest_name" ]]; then
+          owner=$(stat -c%U -- "$dest_name");
+          if [[ "$owner" != "$me" ]]; then
+            echo 1>&2 "*** The destination: \"$dest_name\" is owned by \"$owner\" and not \"$me\"";
+            echo 1>&2 "*** See the \"$HOME/mv_owner_issues.txt\" file for details";
+            error_text="The destination: $(echo \"$dest_name\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+            error_text="$error_text$DAISY_CHAIN$options $(echo \"$source_name\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
+            report_owner_issues "$error_text";
+            regex="^[^/].*$"; # should only match if it is not a real full path
+            if [[ "$dest_name" =~ $regex ]]; then
+                echo "$pwd/$dest_name">>"$HOME/mv_owner_file_list.txt";
+            else
+                echo "$dest_name">>"$HOME/mv_owner_file_list.txt";
+            fi
+            owner_issues=1;# Flag ownership issues
+          fi
+      fi
+    fi
+    # check owner of source_name
+    owner=$(stat -c%U -- "$source_name");
+    if [[ "$owner" != "$me" ]]; then
+        echo 1>&2 "*** The source: \"$source_name\" is owned by $owner and not $me";
+        echo 1>&2 "*** See the \"$HOME/mv_owner_issues.txt\" file for details";
+        error_text="The source: $(echo \"$source_name\" | sed  -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+        error_text="$error_text$DAISY_CHAIN$options $(echo \"$source_name\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
+        report_owner_issues "$error_text";
+        regex="^[^/].*$"; # should only match if it is not a real full path
+        if [[ "$file" =~ $regex ]]; then
+            echo "$pwd/$source_name">>"$HOME/mv_owner_file_list.txt";
+        else
+            echo "$source_name">>"$HOME/mv_owner_file_list.txt";
+        fi
+        owner_issues=1;# Flag ownership issues
+    fi
+}
+for file in "${files[@]}"; do
+    error_code=0;
+    audit_text="";
+    # get rid of trailing slashes on the destination
+    regex="(.*)/+$";
+    if [[ "$dest" =~ $regex ]]; then dest="${BASH_REMATCH[1]}"; fi
+    # source of mv must exist
+    if [[ -e "$file" ]] || [[ -h "$file" ]]; then        
+        # So we know at this point that the source exists.       
+        # Contrary to what I first thought, it does not seem to matter who
+        # owns files or directories inside of a named source directory. But it
+        # does seem to matter if a destination directory would be overwritten
+        # and it contains files. I'll put a check for that in the 
+        # check_for_owner_issues function.
+        source_name="$file";
+        check_for_owner_issues;
+        if [[ $owner_issues -eq 1 ]] || [[ $error_condition -eq 1 ]]; then
+            continue; # skip running mv for this source_name
+        fi     
+        $DAISY_CHAIN $options "$file" "$dest" 2>"$error_file" || error_code="$?";
+        ERROR=$(<"$error_file");
+        if [[ "$error_code" -ne 0 ]]; then
+            audit_text="ERROR: $ERROR"; 
+            echo "$ERROR" 1>&2; # output to stdout and stderr
+            pass_error="$error_code"; # preserve error code for exit
+        fi
+        mv_audit_log "$DAISY_CHAIN$options $(echo \"$file\" | sed  -e 's/%/%%/g') $(echo \"$dest\" | sed  -e 's/%/%%/g')\n";
+    else
+        if [[ "$DISABLE_WRAPPER_WARNINGS" -eq 0 ]]; then
+            echo 1>&2 "*** The source: \"$file\" for the \"mv\" command does not exist.";
+            echo 1>&2 "*** See the \"$HOME/mv_syntax_errors.txt\" file for details";
+            error_text="The source:$(echo \"$file\" | sed  -e 's/%/%%/g') for the \"mv\" command does not exist.\n";
+            error_text="$error_text The mv command would issue an error in this case\n";
+            report_errors "$error_text";
+        fi  
+        if [[ "$DISABLE_WRAPPER_ERROR_CODES" -eq 0 ]]; then
+            error_code_for_missing=1;
+        fi
+    fi
+done
+$UNLINK_BYPASS "$error_file"; # remove temporary file
+# Carry forward error codes from any missing items
+if [[ $error_code_for_missing -eq 1 ]]; then
+    pass_error="$error_code_for_missing";
+fi
+exit $pass_error;
