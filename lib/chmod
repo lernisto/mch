@@ -1,0 +1,45 @@
+#!/bin/bash
+# Copyright (c) 2004 Matthias S. Benkmann <article AT winterdrache DOT de>
+# You may do everything with this code except misrepresent its origin.
+# PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+
+DAISY_CHAIN=""
+
+for p in $(type -ap chmod) ; do
+  if [ ! $p -ef $0 ]; then DAISY_CHAIN=$p ; break ; fi
+done
+
+if [ ! -n "$DAISY_CHAIN" ]; then
+  echo Cannot find real ${0##*/} command 
+  exit 1
+fi
+
+if [ $UID == 0 ]; then
+  exec $DAISY_CHAIN "$@"
+fi
+
+report=0
+doit=1
+reportmsg="*** chmod $@"
+
+set -- "$@" eND_ofLisT
+while true ; do
+  arg="$1"
+  shift 1
+  case "_$arg" in
+    _eND_ofLisT) break ;;
+    _g+s|_u+s) report=1; doit=0  ;;
+    _4755) arg=755 ; report=1; doit=1 ;;
+    _4555) arg=555 ; report=1; doit=1 ;;
+    *) ;;
+  esac
+  set -- "$@" "$arg"
+done
+
+if [ "$report" = 1 ]; then echo 1>&2 "$reportmsg" ; fi
+
+if [ "$doit" = 1 ]; then  
+  exec $DAISY_CHAIN "$@"
+fi
+
+exit 0

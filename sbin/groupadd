@@ -1,0 +1,26 @@
+#!/bin/bash
+# Copyright (c) 2000,2004 Matthias S. Benkmann <article AT winterdrache DOT de>
+# You may do everything with this code except misrepresent its origin.
+# PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+
+#
+# This is a primitive script to serve as groupadd until the real groupadd
+# has been installed. It has little error checking, so don't pass it anything
+# stupid or it'll mess up your /etc/group file.
+#
+
+if [ $# -ne 3 -o z$1 != z-g ]; then
+echo 1>&2 USAGE: groupadd -g gid groupname
+exit 1
+fi
+
+#test if group already exists
+grep "^${3}:.*" /etc/group 
+if [ $? -eq 0 ]; then
+  echo 1>&2 $0: Group does already exist
+  exit 1
+fi       
+
+cp /etc/group /tmp/group123456
+echo ${3}:x:${2}: | sort -t : -k3,3n -m /tmp/group123456 - > /etc/group
+

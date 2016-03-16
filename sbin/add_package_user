@@ -1,0 +1,239 @@
+#!/bin/bash
+# Copyright (c) 2004 Matthias S. Benkmann <article AT winterdrache DOT de>
+# You may do everything with this code except misrepresent its origin.
+# PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+
+#Package user home directories will be located under this directory
+homebase=/usr/src
+
+#Contents of following directory are copied into home directory when creating 
+#a new package user (existing files will not be overwritten)
+skel=/etc/pkgusr/skel-package
+
+if [ $# -lt 7 ]; then
+  echo 1>&2 'USAGE: '
+  echo 1>&2 'add_package_user <description> <name> <minuid> <maxuid> \'
+  echo 1>&2 '                              <group> <mingid> <maxgid> [-d <home>]'
+  echo 1>&2
+  echo 1>&2 'If a user account called <name> exists, a message will be printed and'
+  echo 1>&2 'everything will be left as-is. If a user account called <name> does not'
+  echo 1>&2 'exist, one will be created.'
+  echo 1>&2 'The account'"'"'s primary group will be <group> and the /etc/passwd'
+  echo 1>&2 'description field will be set to <description>. If a group called <group>'
+  echo 1>&2 'does not already exist, one will be created.'
+  echo 1>&2 'The new account will get the "install" group as a supplementary group. If'
+  echo 1>&2 'a group named "install" does not exist, one will be created.'
+  echo 1>&2
+  echo 1>&2 '<description> needs to be a valid string for the /etc/passwd description'
+  echo 1>&2 '  field. This means, among other things, that it must not contain ":".'
+  echo 1>&2 '  Don'"'"'t forget to properly quote <description> if it contains spaces or'
+  echo 1>&2 '  other characters interpreted by the shell!'
+  echo 1>&2
+  echo 1>&2 '<minuid>(incl.) and <maxuid>(excl.) determine the numeric range from which'
+  echo 1>&2 '  the new account'"'"'s UID will be picked in the following way:'
+  echo 1>&2
+  echo 1>&2 '  1. If the range contains no unused UID => Exit with error.'
+  echo 1>&2 '  2. If <maxuid>-1 is still unused, find the greatest UID from the range'
+  echo 1>&2 '     that is used and pick the number after that.'
+  echo 1>&2 '  3. If <maxuid>-1 is in use, pick the first unused number from the range.'
+  echo 1>&2
+  echo 1>&2 '<mingid>(incl.) and <maxgid>(excl.) determine the numeric range from which'
+  echo 1>&2 '  to pick the GID for group <group> and/or group "install", if it needs to be'
+  echo 1>&2 '  created. The process for picking the GID is the same as that for the UID.'
+  echo 1>&2 ''
+  echo 1>&2 '<home> specifies the new user'"'"'s home directory. If it is not provided,'
+  echo 1>&2 '  it will default to '"$homebase/<name> ."
+  echo 1>&2 '  If the home directory does not exist yet it will be created, otherwise'
+  echo 1>&2 '  the existing directory will be recursively chown'"'"'ed to the new user.'
+  echo 1>&2 '  The home directory will be populated with a copy of the contents of'
+  echo 1>&2 "  $skel, but pre-existing files in the home directory"
+  echo 1>&2 '  will not be overwritten. Note that symlinks will be copied as symlinks!'
+  echo 1>&2 ''
+  exit 1
+fi
+
+grpfile=/etc/group
+passwd=/etc/passwd
+
+
+
+description=$1
+name=$2
+minuid=$3
+maxuid=$4
+gname=$5
+mingid=$6
+maxgid=$7
+home=$homebase/$name
+
+set -- "$@" _eNd_OF_lisT_
+while [ "$1" != "_eNd_OF_lisT_" ]; do
+  case "$1" in
+    -d) shift 1
+        if [ "$1" = "_eNd_OF_lisT_" ]; then
+          echo 1>&2 "-d directory name missing!"
+          exit 1
+        fi
+        home="$1"
+        shift 1
+        ;;
+    *) temp="$1" 
+       shift 1
+       set -- "$@" "$temp"
+       ;;
+  esac     
+done
+shift 1 #throw away _eNd_OF_lisT_
+
+if [ $UID -ne 0 ]; then echo Please run this script as root. ; exit 1; fi
+
+#test if user already exists
+grep "^$name:.*" $passwd
+if [ $? -eq 0 ]; then 
+  echo 'Package user does already exist! Do su '$name' to do maintenance work.'
+  exit 1
+fi 
+
+#test if minuid, maxuid, mingid and maxgid are integers, otherwise error
+error=0
+expr ${minuid} + 1 2>/dev/null 1>&2 || error=1
+expr ${maxuid} + 1 2>/dev/null 1>&2 || error=1
+expr ${mingid} + 1 2>/dev/null 1>&2 || error=1
+expr ${maxgid} + 1 2>/dev/null 1>&2 || error=1
+
+if [ $error -eq 1 ]; then
+  echo Error: Illegal numeric value!
+  exit 1
+fi
+
+if [ $minuid -ge $maxuid ]; then
+  echo 'Error: minuid must be less than maxuid !' 
+  exit 1
+fi
+
+if [ $mingid -ge $maxgid ]; then
+  echo 'Error: mingid must be less than maxgid !' 
+  exit 1
+fi
+
+
+uidlist=`cut -d : -f 3 $passwd | sort -n`
+
+#find last used UID within range
+u=0
+for i in $uidlist
+do
+  if [ $i -ge $maxuid ]; then break; fi
+  if [ $i -ge $minuid ]; then u=$i; fi 
+done
+
+#if no UID from the range is used, pick the first, otherwise pick the one
+#immediately following the last UID in use.
+if [ $u -eq 0 ]; then u=$minuid; else u=`expr $u + 1`; fi
+
+#if the UID determined above is >= maxuid (i.e. illegal)
+#then we look for the first unused uid in the range.
+if [ $u -ge $maxuid ]; then
+  u=$minuid
+  for i in $uidlist
+  do
+    if [ $u -eq $i ]; then u=`expr $u + 1` ; fi
+    if [ $i -ge $maxuid ]; then break; fi
+  done  
+
+  if [ $u -ge $maxuid ]; then
+    echo Error: UID range is full!
+    exit 1
+  fi
+fi
+
+echo Will create user $name with uid: $u
+
+unset uidlist
+
+#############################################################################
+#                                 group
+#############################################################################
+
+#execute the following for gname and "install" to get gids for those 2 groups
+
+g=0
+creategroup=0
+for group in install $gname
+do
+  oldg=$g #save gid from previous run
+  createinstall=$creategroup
+  creategroup=0
+ 
+  #test if group already exists and extract gid if so
+  g=`grep ^${group}:.\* $grpfile | cut -d : -f 3 -`
+
+  #if group does not exist, then check range for a free gid
+  if [ z$g = z ]; then 
+    creategroup=1
+    
+    gidlist=`cut -d : -f 3 $grpfile | sort -n`
+
+    #find last used GID within range
+    g=0
+    for i in $gidlist
+    do
+      if [ $i -ge $maxgid ]; then break; fi
+      if [ $i -ge $mingid ]; then g=$i; fi
+    done
+
+    #if no GID from the range is used, pick the first, otherwise pick the one
+    #immediately following the last GID in use.
+    if [ $g -eq 0 ]; then g=$mingid; else g=`expr $g + 1`; fi
+    
+    #don't reuse gid from previous run 
+    if [ $g -eq $oldg ]; then g=`expr $g + 1`; fi
+
+    #if the GID determined above is >= maxgid (i.e. illegal)
+    #then we look for the first unused gid in the range.
+    if [ $g -ge $maxgid ]; then
+      g=$mingid
+      for i in $gidlist
+      do
+        if [ $g -eq $i ]; then g=`expr $g + 1` ; fi
+        if [ $g -eq $oldg ]; then g=`expr $g + 1` ; fi
+        if [ $i -ge $maxgid ]; then break; fi
+      done  
+
+      if [ $g -ge $maxgid ]; then
+        echo Error: GID range is full!
+        exit 1
+      fi
+    fi
+  fi
+done
+
+unset gidlist
+
+if [ $createinstall -eq 1 ]; then
+  echo Creating group install with gid $oldg
+  groupadd -g $oldg install || exit 1
+else
+  echo Group install has gid $oldg
+fi
+if [ $creategroup -eq 1 ]; then
+  echo Creating group $gname with gid $g
+  groupadd -g $g $gname || exit 1
+else 
+  echo Group $gname has gid $g
+fi
+
+
+
+useradd -c "${description}" -d ${home} -g ${gname} -G install \
+        -s /bin/bash -u ${u} ${name}  || exit 1
+
+mkdir -p $home || exit 1
+
+yes n|cp -ai -R ${skel}/{[^.],.[^.],..?}* ${home} 2>/dev/null >/dev/null
+
+cd ${home}
+chown --recursive ${u}:${g} .
+
+
+exit 0

@@ -1,0 +1,10 @@
+# The wrappers directory must be the first entry in the PATH.
+# The /tools/bin directory must be the last entry in the PATH and can be 
+#   removed at the end of Chapter 6.
+export PATH=/usr/lib/pkgusr:/bin:/usr/bin:/sbin:/usr/sbin:/tools/bin
+
+# Make prompt reflect that we are a package user.
+export PROMPT_COMMAND='PS1="package \u:"`pwd`"> "'
+
+# Go to the home directory whenever we su to a package user.
+cd
