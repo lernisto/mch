@@ -1,0 +1,4 @@
+#!/bin/bash
+cd ~/
+find ~/* -maxdepth 0 -type d -exec rm -rf -- {} \;
+exit 0

@@ -1,50 +1,178 @@
 #!/bin/bash
 # Copyright (c) 2000 Matthias S. Benkmann <article AT winterdrache DOT de>
 # You may do everything with this code except misrepresent its origin.
-# PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
-
-watchdir=/usr/share/locale
-
-DAISY_CHAIN=""
+# PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+#
+# Altered by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+DAISY_CHAIN="";
+UNLINK_BYPASS="";
+me=$(whoami);
+reportmsg="mkdir";
+for item in "$@"; do
+	regex="^.*['[:space:]].*$";
+	if [[ "$item" =~ $regex ]]; then
+	    regex="^(.*=)(.*['[:space:]].*)$";
+	    if [[ "$item" =~ $regex ]]; then
+			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+		else
+			reportmsg="$reportmsg \"$item\"";
+		fi
+	else
+		reportmsg="$reportmsg $item";
+	fi
+done
 
 for p in $(type -ap mkdir) ; do
-  if [ ! $p -ef $0 ]; then DAISY_CHAIN=$p ; break ; fi
+  if [ ! $p -ef $0 ]; then DAISY_CHAIN="$p"; break ; fi
 done
 
-if [ ! -n "$DAISY_CHAIN" ]; then
-  echo Cannot find real ${0##*/} command 
-  exit 1
+if [ -z "$DAISY_CHAIN" ]; then
+  echo "Cannot find real ${0##*/} command";
+  exit 1;
 fi
 
-if [ $UID == 0 ]; then
-  exec $DAISY_CHAIN "$@"
+if [[ $UID -eq 0 ]]; then
+  $DAISY_CHAIN "$@";
 fi
 
-cmdline="$@"
-
-dirs=""
-for((i=$#; $i>0;))
-do
-  a="$1"
-  shift 1; i=$(($i-1))
-  case "$a" in
-    $watchdir/*) dirs="$dirs ""`expr $a : "$watchdir/\(.*\)"`" 
-                 set -- "$@" "$a" 
-                 ;;
-    *) set -- "$@" "$a" ;;
-  esac
+for p in $(type -ap unlink) ; do
+  if [[ "$p" != "/usr/lib/pkgusr/unlink" ]]; then UNLINK_BYPASS="$p"; break ; fi
 done
 
-$DAISY_CHAIN "$@" || exit $?
+options="";
+# In order to preserve whitespace and special characters, "files" is an array
+files=();
+stopgettingoptions=0;
+addnext=0;
+item="";
+pass_error=0;
+pwd=$(pwd);
+error_code=0;
+audit_text="";
 
-test z"$dirs" != z &&
-echo 1>&2 '***' mkdir "$cmdline"
-for dir in $dirs ; do
-  cumuldir=""
-  for d in `echo $dirs | sed 's#/# #g' -` ; do
-    cumuldir=$cumuldir$d/
-    chgrp install $watchdir/$cumuldir
-    test -k $watchdir/$cumuldir || chmod g+w,o+t $watchdir/$cumuldir
-  done  
+mkdir_audit_log(){
+	text="\n";
+	text="$text ------ original command -------------\n";
+	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+	text="$text ------ one of the resulting commands actually run -------\n";
+	text="$text $1";
+	if [[ -n "$audit_text" ]]; then
+		text="$text error_code is: $error_code\n";
+		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+		printf "$text" >>"$HOME/mkdir_errors.txt";
+	fi
+	# while debugging this wrapper you may want to uncomment the following line
+	#printf "$text" >>"$HOME/mkdir_audit.txt";
+}
+
+# Syntax
+# mkdir [OPTION]... DIRECTORY...
+#
+#-m, --mode=MODE
+#    set file mode (as in chmod), not a=rwx - umask
+#-p, --parents
+#    no error if existing, make parent directories as needed
+#-v, --verbose
+#    print a message for each created directory
+#-Z, --context=CTX
+#    set the SELinux security context of each created directory to CTX
+#--help
+#    display this help and exit
+#--version
+#    output version information and exit
+
+# This for loop manages to process filenames or paths with white space or
+# special characters.
+for item in "$@"; do
+	if [[ $stopgettingoptions -eq 0 ]]; then
+		if [[ "$item" = '--' ]]; then
+			options="$options $item";
+			stopgettingoptions=1;
+			continue;
+		fi
+		# With options, spaces are assumed to delimit the options so we need
+		# continuation logic to process options that have been split with spaces.
+		if [[ $addnext -eq 1 ]];then
+			if [[ "$item" = '=' ]]; then
+				options="$options $item";
+			else
+				addnext=0;
+				options="$options $item";
+			fi
+			continue;
+		fi
+		if [[ "$item" = '--help' ]]; then
+			mkdir_audit_log "$DAISY_CHAIN \"--help\"\n";
+			$DAISY_CHAIN "--help";
+			exit 0;
+		fi
+		if [[ "$item" = '--version' ]]; then
+			mkdir_audit_log "$DAISY_CHAIN \"--version\"\n";
+			$DAISY_CHAIN "--version";
+			exit 0;
+		fi
+		regex="^-Z(.*)$";
+		if [[ "$item" =~ $regex ]]; then
+			if [[ -z "${BASH_REMATCH[1]}" ]]; then
+				addnext=1;
+			fi
+			options="$options $item";
+			continue;
+		fi
+		regex="^--context[=]*(.*)$";
+		if [[ "$item" =~ $regex ]]; then
+		    if [[ -z "${BASH_REMATCH[1]}" ]]; then
+				addnext=1;
+			fi
+			options="$options $item";
+			continue;
+		fi
+		regex="^-m(.*)$";
+		if [[ "$item" =~ $regex ]]; then
+			if [[ -z "${BASH_REMATCH[1]}" ]]; then
+				addnext=1;
+			fi
+			options="$options $item";
+			continue;
+		fi
+		regex="^--mode[=]*(.*)$";
+		if [[ "$item" =~ $regex ]]; then
+			if [[ -z "${BASH_REMATCH[1]}" ]]; then
+				addnext=1;
+			fi
+			options="$options $item";
+			continue;
+		fi
+		regex="^-.*$";
+		if [[ "$item" =~ $regex ]]; then
+			options="$options $item";
+			continue;
+		fi
+		files+=("$item");
+	else
+		files+=("$item");
+	fi
 done
-exit 0
+
+error_file=$(mktemp -t mkdir.XXXXXXXXXX);# temporary file for stderr output
+for directory in "${files[@]}"; do
+	error_code=0;
+	audit_text="";
+	if [[ -e "$directory" ]]; then
+		:
+		# We avoid most ownership issues by skipping existing directories
+		# echo "*** Directory already exists: \"$directory\""
+	else
+		$DAISY_CHAIN $options "$directory" 2>"$error_file" || error_code="$?";
+		ERROR=$(<"$error_file");
+		if [[ "$error_code" -ne 0 ]]; then
+			audit_text="ERROR: $ERROR";
+			echo "$ERROR" 1>&2; # output to stdout and stderr
+			pass_error="$error_code";
+		fi
+		mkdir_audit_log "$DAISY_CHAIN$options $(echo \"$directory\" | sed -e 's/%/%%/g')\n";
+	fi
+done
+$UNLINK_BYPASS "$error_file"; # remove temporary file
+exit "$pass_error";

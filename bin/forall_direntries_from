@@ -22,8 +22,8 @@ fs_to_scan=(/)
 #as /home. This reduces scan time.
 #NOTE: The LFS-6.0 book uses a ramfs mounted on /dev and with that setup
 #/dev does not need to be in the prune list. But since there is no requirement
-#that /dev have its on filesystem it's better to prune it explicitly.
-prune_prefixes=(/home /usr/src /dev /tools) #NO TRAILING SLASHES!!!!
+#that /dev have its own filesystem it's better to prune it explicitly.
+prune_prefixes=(/home /usr/src /dev /tools /root) #NO TRAILING SLASHES!!!!
 
 if [ $# -lt 1 -o "$1" = "--help" ]; then
   echo 1>&2

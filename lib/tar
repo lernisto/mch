@@ -1,0 +1,90 @@
+#!/bin/bash
+# Copyright (c) Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# You may do everything with this code except misrepresent its origin.
+# PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+#
+DAISY_CHAIN="";
+UNLINK_BYPASS="";
+me=$(whoami);
+reportmsg="tar";
+for item in "$@"; do
+	regex="^.*['[:space:]].*$";
+	if [[ "$item" =~ $regex ]]; then
+	    regex="^(.*=)(.*['[:space:]].*)$";
+	    if [[ "$item" =~ $regex ]]; then
+			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+		else
+			reportmsg="$reportmsg \"$item\"";
+		fi
+	else
+		reportmsg="$reportmsg $item";
+	fi
+done
+
+for p in $(type -ap tar) ; do
+  if [ ! $p -ef $0 ]; then DAISY_CHAIN="$p"; break ; fi
+done
+
+if [ -z "$DAISY_CHAIN" ]; then
+  echo "Cannot find real ${0##*/} command";
+  exit 1;
+fi
+
+if [ $UID -eq 0 ]; then
+  $DAISY_CHAIN "$@";
+fi
+
+for p in $(type -ap unlink) ; do
+  if [[ "$p" != "/usr/lib/pkgusr/unlink" ]]; then UNLINK_BYPASS="$p"; break ; fi
+done
+
+# Usage: tar [OPTION...] [FILE]...
+
+# In the case of package installation, typically tar is being used to archive
+# an entire directory. The package install then changes to the destination
+# directory and extracts all the files in the tar archive to the new current
+# directory. With so many possible options and variations for the "tar"
+# command usage it does not make sense to make anything more complicated than
+# this unless we run into issues we wish to catch other than ownership of
+# of the current directory.
+
+error_code=0;
+audit_text="";
+
+pwd=$(pwd);
+
+owner=$(stat -c%U -- "$pwd");
+
+# It might be nice to know where "tar" is run, what parameters it is given
+# and who owns the directory that "tar" is being run in.
+report_tar_useage(){
+	text="\n";
+	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+	text="$text owner of $(echo \"$pwd\" | sed -e 's/%/%%/g') is: \"$owner\"\n";
+	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+	if [[ -n "$audit_text" ]]; then
+		text="$text error_code is: $error_code\n";
+		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+		printf "$text" >>"$HOME/tar_errors.txt";
+	fi
+	# while debugging this wrapper you may wish to uncomment the following line
+	#printf "$text" >>"$HOME/tar_audit.txt";
+}
+error_file=$(mktemp -t tar.XXXXXXXXXX);# temporary file for stderr output
+$DAISY_CHAIN "$@" 2>"$error_file" || error_code="$?";
+ERROR=$(<"$error_file");
+$UNLINK_BYPASS "$error_file"; # remove temporary file
+echo "";# required for some reason to prevent false positive for $error_code
+if [[ "$error_code" -ne 0 ]]; then
+	if [[ "$owner" != "$me" ]]; then
+		echo "$pwd">>"$HOME/tar_owner_file_list.txt";
+		echo 1>&2 "*** The pwd: \"$pwd\"  is owned by  \"$owner\" and not \"$me\"";
+		echo 1>&2 "*** See the \"$HOME/tar_audit.txt\" file for details.";
+	fi
+	audit_text="ERROR: $ERROR";
+	echo "$ERROR" 1>&2;
+fi
+
+report_tar_useage;
+
+exit "$error_code";

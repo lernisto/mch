@@ -1,0 +1,15 @@
+#!/bin/bash
+# Author: Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# These lines add directories to the list....
+find /usr -type d > /root/installdirs.lst
+find /var -type d >> /root/installdirs.lst
+find /opt -type d >> /root/installdirs.lst
+find /lib -type d >> /root/installdirs.lst
+find /bin -type d >> /root/installdirs.lst
+find /sbin -type d >> /root/installdirs.lst
+find /etc -type d >> /root/installdirs.lst
+# This line removes some from the list...
+sed -i -e '/.usr.src/d' /root/installdirs.lst
+# These lines make the directories in the list install directories...
+chown 0:9999 $(cat /root/installdirs.lst)
+chmod ug=rwx,o=rxt $(cat /root/installdirs.lst)

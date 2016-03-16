@@ -2,6 +2,8 @@
 # Copyright (c) 2000-2006 Matthias S. Benkmann <article AT winterdrache DOT de>
 # You may do everything with this code except misrepresent its origin.
 # PROVIDED `AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+#
+# Changed by Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
 
 # This script will build a package based on the commands in $HOME/build.conf
 # It can be called with the following parameters that
@@ -22,6 +24,7 @@
 # After running the script you should check the *.err files to see
 # if any problems have occurred. If that is the case, use the corresponding
 # *.log files to see the error messages in context.
+#
 
 build_script="$(readlink -f "$0")"
 
@@ -52,6 +55,7 @@ unpack_commands()
         case z"$archive" in
           z*.tar.bz2) dir=$(tar tjf "$archive" | grep / | head -n 1) ; tar xjf "$archive"  ;;
           z*.tar.gz)  dir=$(tar tzf "$archive" | grep / | head -n 1) ; tar xzf "$archive"  ;;
+          z*.tar.xz)  dir=$(tar tJf "$archive" | grep / | head -n 1) ; tar xJf "$archive"  ;;
         esac
       fi
       dir=${dir##./}
@@ -80,7 +84,8 @@ test_pipe()
 }
 
 if [ $# -eq 0 ]; then
-  set -- unpack patch configure make check root_pre_install install root_post_install clean
+  set -- unpack patch configure make check root_pre_install install root_post_install
+  # I removed "clean" from the end of the above default parameters
 fi
 
 while [ -n "$1" ]; do
@@ -92,7 +97,6 @@ while [ -n "$1" ]; do
         
     _unpack)
         echo -n Unpacking...
-
         unpack_commands # no logging for unpack necessary 
         test_pipe
         ;;

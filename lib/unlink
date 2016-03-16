@@ -1,0 +1,110 @@
+#!/bin/bash
+# Copyright (c) Robert Taylor <rtaylor777 AT gmail DOT com> April 2013
+# You may do everything with this code except misrepresent its origin.
+# PROVIDED 'AS IS' WITH ABSOLUTELY NO WARRANTY OF ANY KIND!
+#
+DAISY_CHAIN="";
+me=$(whoami);
+reportmsg="unlink";
+for item in "$@"; do
+	regex="^.*['[:space:]].*$";
+	if [[ "$item" =~ $regex ]]; then
+	    regex="^(.*=)(.*['[:space:]].*)$";
+	    if [[ "$item" =~ $regex ]]; then
+			reportmsg="$reportmsg ${BASH_REMATCH[1]}\"${BASH_REMATCH[2]}\"";
+		else
+			reportmsg="$reportmsg \"$item\"";
+		fi
+	else
+		reportmsg="$reportmsg $item";
+	fi
+done
+
+for p in $(type -ap unlink) ; do
+  if [ ! $p -ef $0 ]; then DAISY_CHAIN="$p"; break ; fi
+done
+
+if [ -z "$DAISY_CHAIN" ]; then
+  echo "Cannot find real ${0##*/} command";
+  exit 1;
+fi
+
+if [ $UID -eq 0 ]; then
+  $DAISY_CHAIN "$@";
+fi
+
+pwd=$(pwd);
+pass_error=0;
+error_code=0;
+audit_text="";
+
+report_owner_issues(){
+	text="\n";
+	text="$text ------file ownership issues-------------\n";
+	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+	text="$text $1\n";
+	printf "$text" >>"$HOME/unlink_owner_issues.txt";
+}
+unlink_audit_log(){
+	text="\n";
+	text="$text ------ original command -------------\n";
+	text="$text $(echo $reportmsg | sed -e 's/%/%%/g')\n";
+	text="$text present working directory is: $(echo \"$pwd\" | sed -e 's/%/%%/g')\n";
+	text="$text ------ one of the resulting commands actually run -------\n";
+	text="$text $1";
+	if [[ -n "$audit_text" ]]; then
+		text="$text error_code is: $error_code\n";
+		text="$text $(echo $audit_text | sed -e 's/%/%%/g')\n";
+		printf "$text" >>"$HOME/unlink_errors.txt";
+	fi
+	# while debugging this wrapper you may wish to uncomment the following line
+	#printf "$text" >>"$HOME/unlink_audit.txt";
+}
+
+# Syntax
+# unlink FILE
+# There is only one parameter for this command and it is likely a file or link
+
+error_file=$(mktemp -t unlink.XXXXXXXXXX);# temporary file for stderr output
+
+# Note: because of our "for" loop, we could process more than one file on the
+# command line which is something the unlink command can not normally support.
+# This "for" loop manages to process filenames or paths with white space or 
+# special characters.
+for item in "$@"; do
+	error_code=0;
+	audit_text="";
+	if [[ -d "$item" ]]; then
+		# unlink is not supposed to be used on a directory
+		echo 1>&2 "*** ERROR: \"$item\" is a directory, unlink can not remove a directory.";
+		$DAISY_CHAIN "$error_file"; # remove temporary file
+		exit 0;
+	else
+		owner=$(stat -c%U -- "$item");
+		object="file or link";
+	fi
+	if [[ "$owner" != "$me" ]]; then
+		echo 1>&2 "*** The $object: \"$item\"  is owned by \"$owner\" and not \"$me\"";
+		echo 1>&2 "*** See the \"$HOME/unlink_owner_issues.txt\" file for details";
+		error_text="The $object: $(echo \"$item\" | sed -e 's/%/%%/g') is owned by \"$owner\" and not \"$me\"\n";
+		error_text="$error_text$DAISY_CHAIN $(echo \"$item\" | sed -e 's/%/%%/g')\n";
+		report_owner_issues "$error_text";
+		regex2="^[^/].*$"; # should only match if it is not a real full path
+		if [[ "$item" =~ $regex2 ]]; then
+			echo "$pwd/$item">>"$HOME/unlink_owner_file_list.txt";
+		else
+			echo "$item">>"$HOME/unlink_owner_file_list.txt";
+		fi
+	else
+		$DAISY_CHAIN "$item" 2>"$error_file" || error_code="$?";
+		ERROR=$(<"$error_file");		
+		if [[ "$error_code" -ne 0 ]]; then
+			audit_text="ERROR: $ERROR";	
+			echo "$ERROR" 1>&2; # output to stdout and stderr
+			pass_error="$error_code";
+		fi
+		unlink_audit_log "$DAISY_CHAIN $(echo \"$item\" | sed -e 's/%/%%/g')\n";
+	fi
+done
+$DAISY_CHAIN "$error_file"; # remove temporary file
+exit "$pass_error";
